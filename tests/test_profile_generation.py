@@ -75,6 +75,9 @@ def test_profile_generated_and_persisted_after_messages(tmp_path) -> None:
     assert profile is not None
     assert "学习与考试" in profile.profile_summary
     assert profile.preference_summary.strip() != ""
+    assert profile.schedule_state.strip() != ""
+    assert 0.0 <= profile.fatigue_level <= 1.0
+    assert 0.0 <= profile.emotion_peak_level <= 1.0
 
 
 def test_user_ai_relation_state_evolves_after_conversation(tmp_path) -> None:

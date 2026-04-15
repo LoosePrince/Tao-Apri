@@ -101,14 +101,21 @@ class ChatOrchestrator:
             },
         )
 
-    def _build_profile_summary(self, user_id: str) -> tuple[str, str]:
+    def _build_profile_summary(
+        self,
+        *,
+        user_id: str,
+        session_emotion: float,
+        global_emotion: float,
+        current_hour: int,
+    ) -> tuple[str, str, str, float, float]:
         recent_messages = self.message_repo.list_by_user(
             user_id=user_id,
             limit=settings.profile.recent_message_limit,
         )
         user_texts = [msg.sanitized_content.strip() for msg in recent_messages if msg.role == "user" and msg.sanitized_content.strip()]
         if not user_texts:
-            return "", ""
+            return "", "", "", 0.0, 0.0
 
         topic_counter = Counter(self._infer_topic(text) for text in user_texts)
         top_topics = [topic for topic, _ in topic_counter.most_common(3)]
@@ -122,8 +129,35 @@ class ChatOrchestrator:
             if any(keyword in text for keyword in ("不想", "讨厌", "别", "不要")):
                 preference_cues.append("会明确表达边界与不偏好")
         preference_summary = "；".join(dict.fromkeys(preference_cues)) or "偏好信息有限，建议继续观察。"
+
+        schedule_state = "常规节奏"
+        primary_topic = top_topics[0] if top_topics else "日常近况"
+        if primary_topic == "学习与考试":
+            schedule_state = "学习周期"
+        elif primary_topic == "工作与职业":
+            schedule_state = "工作周期"
+        elif primary_topic in ("作息与健康", "情绪与关系"):
+            schedule_state = "休整周期"
+        if 23 <= current_hour or current_hour <= 5:
+            schedule_state += "（夜间阶段）"
+
+        fatigue_hits = sum(
+            1
+            for text in user_texts
+            if any(token in text for token in ("累", "困", "失眠", "疲惫", "没精神", "头疼"))
+        )
+        fatigue_level = fatigue_hits / max(1, len(user_texts))
+        if 23 <= current_hour or current_hour <= 5:
+            fatigue_level += 0.15
+        if session_emotion < -0.2:
+            fatigue_level += 0.1
+        fatigue_level = self._clamp01(fatigue_level)
+
+        peak_from_messages = max((abs(msg.emotion_score) for msg in recent_messages if msg.role == "user"), default=0.0)
+        emotion_peak_level = self._clamp01(max(peak_from_messages, abs(session_emotion), abs(global_emotion)))
+
         profile_summary = f"近期关注话题：{topic_text}；{style_text}。"
-        return profile_summary, preference_summary
+        return profile_summary, preference_summary, schedule_state, fatigue_level, emotion_peak_level
 
     @staticmethod
     def _clamp01(value: float) -> float:
@@ -298,20 +332,37 @@ class ChatOrchestrator:
             emotion_score=message_score,
         )
         logger.debug("User message persisted | user_id=%s | session_id=%s", user_id, session.session_id)
-        profile_summary_generated, preference_summary_generated = self._build_profile_summary(user_id)
+        (
+            profile_summary_generated,
+            preference_summary_generated,
+            schedule_state_generated,
+            fatigue_level_generated,
+            emotion_peak_generated,
+        ) = self._build_profile_summary(
+            user_id=user_id,
+            session_emotion=emotion_state.session_emotion,
+            global_emotion=emotion_state.global_emotion,
+            current_hour=now.hour,
+        )
         if profile_summary_generated:
             self.profile_repo.upsert(
                 UserProfile(
                     user_id=user_id,
                     profile_summary=profile_summary_generated,
                     preference_summary=preference_summary_generated,
+                    schedule_state=schedule_state_generated,
+                    fatigue_level=fatigue_level_generated,
+                    emotion_peak_level=emotion_peak_generated,
                 )
             )
             logger.info(
-                "Profile updated | user_id=%s | profile_summary=%s | preference_summary=%s",
+                "Profile updated | user_id=%s | profile_summary=%s | preference_summary=%s | schedule_state=%s | fatigue_level=%.3f | emotion_peak=%.3f",
                 user_id,
                 profile_summary_generated,
                 preference_summary_generated,
+                schedule_state_generated,
+                fatigue_level_generated,
+                emotion_peak_generated,
             )
 
         retrieval_plan = None
@@ -377,6 +428,10 @@ class ChatOrchestrator:
         profile_summary = ""
         if profile:
             profile_parts = [profile.profile_summary.strip(), profile.preference_summary.strip()]
+            if profile.schedule_state.strip():
+                profile_parts.append(f"周期状态：{profile.schedule_state.strip()}")
+            profile_parts.append(f"疲惫度：{profile.fatigue_level:.2f}")
+            profile_parts.append(f"情绪波峰：{profile.emotion_peak_level:.2f}")
             profile_summary = "\n".join(part for part in profile_parts if part)
         logger.debug(
             "Profile selected for prompt | user_id=%s | has_profile=%s | profile_len=%s",

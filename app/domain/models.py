@@ -75,4 +75,7 @@ class UserProfile:
     user_id: str
     profile_summary: str = ""
     preference_summary: str = ""
+    schedule_state: str = ""
+    fatigue_level: float = 0.0
+    emotion_peak_level: float = 0.0
     updated_at: datetime | None = None

@@ -131,6 +131,9 @@ class SQLiteStore:
                 user_id TEXT PRIMARY KEY,
                 profile_summary TEXT NOT NULL,
                 preference_summary TEXT NOT NULL,
+                schedule_state TEXT NOT NULL DEFAULT '',
+                fatigue_level REAL NOT NULL DEFAULT 0,
+                emotion_peak_level REAL NOT NULL DEFAULT 0,
                 updated_at TEXT NOT NULL
             );
             """
@@ -158,6 +161,22 @@ class SQLiteStore:
         if "dependency_score" not in relation_columns:
             self.conn.execute(
                 "ALTER TABLE user_relations ADD COLUMN dependency_score REAL NOT NULL DEFAULT 0"
+            )
+        profile_columns = {
+            row["name"]
+            for row in self.conn.execute("PRAGMA table_info(user_profiles)").fetchall()
+        }
+        if "schedule_state" not in profile_columns:
+            self.conn.execute(
+                "ALTER TABLE user_profiles ADD COLUMN schedule_state TEXT NOT NULL DEFAULT ''"
+            )
+        if "fatigue_level" not in profile_columns:
+            self.conn.execute(
+                "ALTER TABLE user_profiles ADD COLUMN fatigue_level REAL NOT NULL DEFAULT 0"
+            )
+        if "emotion_peak_level" not in profile_columns:
+            self.conn.execute(
+                "ALTER TABLE user_profiles ADD COLUMN emotion_peak_level REAL NOT NULL DEFAULT 0"
             )
         self.conn.commit()
 
@@ -569,7 +588,7 @@ class SQLiteProfileRepo(ProfileRepo):
     def get(self, user_id: str) -> UserProfile | None:
         row = self.store.conn.execute(
             """
-            SELECT user_id, profile_summary, preference_summary, updated_at
+            SELECT user_id, profile_summary, preference_summary, schedule_state, fatigue_level, emotion_peak_level, updated_at
             FROM user_profiles
             WHERE user_id = ?
             """,
@@ -581,6 +600,9 @@ class SQLiteProfileRepo(ProfileRepo):
             user_id=row["user_id"],
             profile_summary=row["profile_summary"],
             preference_summary=row["preference_summary"],
+            schedule_state=row["schedule_state"],
+            fatigue_level=float(row["fatigue_level"]),
+            emotion_peak_level=float(row["emotion_peak_level"]),
             updated_at=_parse_dt(row["updated_at"]),
         )
 
@@ -589,18 +611,24 @@ class SQLiteProfileRepo(ProfileRepo):
         self.store.conn.execute(
             """
             INSERT INTO user_profiles (
-                user_id, profile_summary, preference_summary, updated_at
+                user_id, profile_summary, preference_summary, schedule_state, fatigue_level, emotion_peak_level, updated_at
             )
-            VALUES (?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(user_id) DO UPDATE SET
                 profile_summary = excluded.profile_summary,
                 preference_summary = excluded.preference_summary,
+                schedule_state = excluded.schedule_state,
+                fatigue_level = excluded.fatigue_level,
+                emotion_peak_level = excluded.emotion_peak_level,
                 updated_at = excluded.updated_at
             """,
             (
                 profile.user_id,
                 profile.profile_summary,
                 profile.preference_summary,
+                profile.schedule_state,
+                profile.fatigue_level,
+                profile.emotion_peak_level,
                 now,
             ),
         )
