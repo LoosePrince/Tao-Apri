@@ -182,25 +182,39 @@ class ChatOrchestrator:
         viewer_user_id: str,
         query: str,
         memories: list[Message],
-    ) -> tuple[list[Message], bool]:
+    ) -> tuple[list[Message], bool, dict[str, int]]:
         visible: list[Message] = []
         denied_cross_count = 0
+        relation_denied = 0
+        similarity_denied = 0
+        preference_denied = 0
+        cross_candidates = 0
         for memory in memories:
             if memory.user_id == viewer_user_id:
                 visible.append(memory)
                 continue
+            cross_candidates += 1
             relation_allowed, relation_threshold = self._relation_allows_cross(viewer_user_id, memory.user_id)
             if not relation_allowed:
                 denied_cross_count += 1
+                relation_denied += 1
                 continue
             if self._memory_similarity(query, memory.sanitized_content) < relation_threshold:
                 denied_cross_count += 1
+                similarity_denied += 1
                 continue
             if not self._preference_allows(memory.user_id, memory.sanitized_content):
                 denied_cross_count += 1
+                preference_denied += 1
                 continue
             visible.append(memory)
-        return visible, denied_cross_count > 0
+        return visible, denied_cross_count > 0, {
+            "cross_candidates": cross_candidates,
+            "relation_denied": relation_denied,
+            "similarity_denied": similarity_denied,
+            "preference_denied": preference_denied,
+            "cross_allowed": max(0, cross_candidates - denied_cross_count),
+        }
 
     def handle_message(self, *, user_id: str, user_message: str) -> ChatResult:
         logger.info("Chat handling started | user_id=%s", user_id)
@@ -290,7 +304,7 @@ class ChatOrchestrator:
                 remaining_retrievals=remaining_retrievals,
             )
         memories = retrieved
-        memories, cross_access_denied = self._apply_cross_access_control(
+        memories, cross_access_denied, access_stats = self._apply_cross_access_control(
             viewer_user_id=user_id,
             query=user_message,
             memories=memories,
@@ -311,12 +325,24 @@ class ChatOrchestrator:
             [m.sanitized_content for m in memories],
         )
         profile = self.profile_repo.get(user_id)
-        profile_summary = profile.profile_summary if profile and profile.profile_summary.strip() else ""
+        profile_summary = ""
+        if profile:
+            profile_parts = [profile.profile_summary.strip(), profile.preference_summary.strip()]
+            profile_summary = "\n".join(part for part in profile_parts if part)
         logger.debug(
             "Profile selected for prompt | user_id=%s | has_profile=%s | profile_len=%s",
             user_id,
             bool(profile_summary),
             len(profile_summary),
+        )
+        logger.info(
+            "Generation chain | user_id=%s | relation_allowed=%s | relation_denied=%s | similarity_denied=%s | preference_denied=%s | profile_injected=%s",
+            user_id,
+            access_stats["cross_allowed"],
+            access_stats["relation_denied"],
+            access_stats["similarity_denied"],
+            access_stats["preference_denied"],
+            bool(profile_summary),
         )
         persona = self.persona_engine.get_runtime_persona(now)
         prompt_ctx = self.prompt_composer.compose(
