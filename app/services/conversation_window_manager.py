@@ -81,7 +81,10 @@ class ConversationWindowManager:
         state = self._state_for(user_id)
         now = time.monotonic()
         with state.lock:
-            is_terminate = any(token in user_message for token in settings.rhythm.terminate_keywords)
+            is_terminate = (
+                settings.rhythm.enable_terminate_keywords
+                and any(token in user_message for token in settings.rhythm.terminate_keywords)
+            )
             if is_terminate:
                 self.metrics.inc("abort_count")
                 if state.mode in {"LOCKED", "RESPONDING", "HANDOVER"}:
@@ -144,8 +147,45 @@ class ConversationWindowManager:
         with state.lock:
             state.mode = "RESPONDING"
             abort_requested = state.abort_requested
+
+        def _fallback_timeout_result() -> ChatResult:
+            return ChatResult(
+                session_id=f"timeout-{user_id}-{round_id}",
+                reply="（本轮思考超时，已中断当前回答。请继续发送，我会基于新一轮继续处理。）",
+                session_emotion=0.0,
+                global_emotion=0.0,
+            )
+
         try:
-            result = self.batch_executor(user_id, batch, abort_requested)
+            if settings.rhythm.enable_max_think_seconds:
+                holder: dict[str, ChatResult | Exception | None] = {"result": None}
+                finished = threading.Event()
+
+                def _execute() -> None:
+                    try:
+                        holder["result"] = self.batch_executor(user_id, batch, abort_requested)
+                    except Exception as exc:  # pragma: no cover
+                        holder["result"] = exc
+                    finally:
+                        finished.set()
+
+                threading.Thread(
+                    target=_execute,
+                    name=f"window-batch-exec-{user_id}-{round_id}",
+                    daemon=True,
+                ).start()
+                if not finished.wait(timeout=settings.rhythm.max_think_seconds):
+                    self.metrics.inc("max_think_timeout_count")
+                    result = _fallback_timeout_result()
+                else:
+                    maybe_result = holder["result"]
+                    if isinstance(maybe_result, Exception):
+                        raise maybe_result
+                    if not isinstance(maybe_result, ChatResult):
+                        raise RuntimeError("Batch executor returned invalid result")
+                    result = maybe_result
+            else:
+                result = self.batch_executor(user_id, batch, abort_requested)
         except Exception as exc:
             with state.lock:
                 for waiter in state.waiters:

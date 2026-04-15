@@ -78,12 +78,14 @@ class LLMConfig(BaseModel):
 class RhythmConfig(BaseModel):
     enabled: bool = True
     silence_seconds: float = Field(default=15.0, ge=1.0, le=120.0)
+    enable_max_think_seconds: bool = True
     max_think_seconds: float = Field(default=45.0, ge=5.0, le=300.0)
     cooldown_seconds: float = Field(default=2.0, ge=0.0, le=30.0)
     single_message_char_threshold: int = Field(default=200, ge=20, le=5000)
     single_message_token_threshold: int = Field(default=400, ge=20, le=8000)
     window_char_threshold: int = Field(default=600, ge=50, le=20000)
     window_token_threshold: int = Field(default=1200, ge=50, le=40000)
+    enable_terminate_keywords: bool = True
     terminate_keywords: list[str] = Field(default_factory=lambda: ["算了", "不用了", "当我没说"])
     wait_timeout_seconds: float = Field(default=90.0, ge=5.0, le=600.0)
 
