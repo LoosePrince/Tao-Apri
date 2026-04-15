@@ -78,30 +78,50 @@ class OneBotWSClient:
                 raw = await ws.recv()
             except ConnectionClosed:
                 break
+            logger.debug("OneBot raw event: %s", raw)
             try:
                 event = json.loads(raw)
             except json.JSONDecodeError:
+                logger.debug("Skip non-json event frame.")
                 continue
             await self._handle_event(ws, event)
 
     async def _handle_event(self, ws: websockets.ClientConnection, event: dict[str, Any]) -> None:
         if event.get("post_type") != "message":
+            logger.debug("Skip non-message event post_type=%s", event.get("post_type"))
             return
         if event.get("message_type") != "private":
+            logger.debug("Skip non-private message type=%s", event.get("message_type"))
             return
         user_id = int(event.get("user_id", 0))
         if settings.app.debug and user_id != settings.onebot.debug_only_user_id:
+            logger.debug(
+                "Skip message by debug filter user_id=%s expected=%s",
+                user_id,
+                settings.onebot.debug_only_user_id,
+            )
             return
 
         message_payload = event.get("message")
         user_text = _extract_text_from_array_message(message_payload)
         if not user_text:
+            logger.debug("Skip empty text message payload=%s", message_payload)
             return
+        logger.info("OneBot received private message | user_id=%s | text=%s", user_id, user_text)
+        logger.debug("OneBot full event payload: %s", event)
 
         result = self.chat_orchestrator.handle_message(
             user_id=str(user_id),
             user_message=user_text,
         )
+        logger.info(
+            "OneBot message processed | user_id=%s | session_id=%s | session_emotion=%.3f | global_emotion=%.3f",
+            user_id,
+            result.session_id,
+            result.session_emotion,
+            result.global_emotion,
+        )
+        logger.debug("OneBot reply text: %s", result.reply)
 
         action_payload = {
             "action": "send_private_msg",
@@ -110,4 +130,6 @@ class OneBotWSClient:
                 "message": result.reply,
             },
         }
+        logger.debug("OneBot send payload: %s", action_payload)
         await ws.send(json.dumps(action_payload, ensure_ascii=False))
+        logger.info("OneBot reply sent | user_id=%s", user_id)

@@ -14,6 +14,7 @@
 - `APP__NAME`：应用名
 - `APP__ENV`：环境名（dev/prod）
 - `APP__DEBUG`：是否 debug
+- `APP__TIMEZONE`：业务时间时区（默认 `Asia/Shanghai`）
 
 - `STORAGE__SQLITE_DB_PATH`：SQLite 文件路径
 

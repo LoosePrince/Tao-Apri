@@ -1,6 +1,7 @@
 from dataclasses import dataclass
-from datetime import datetime, timezone
+import logging
 
+from app.core.clock import now_local
 from app.core.config import settings
 from app.domain.models import Message
 from app.domain.services.emotion_engine import EmotionEngine
@@ -10,6 +11,8 @@ from app.domain.services.persona_engine import PersonaEngine
 from app.repos.interfaces import MessageRepo, VectorRepo
 from app.services.llm_client import LLMClient
 from app.services.prompt_composer import PromptComposer
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -53,13 +56,29 @@ class ChatOrchestrator:
         )
 
     def handle_message(self, *, user_id: str, user_message: str) -> ChatResult:
-        now = datetime.now(timezone.utc)
+        logger.info("Chat handling started | user_id=%s", user_id)
+        logger.debug("Incoming user message | user_id=%s | text=%s", user_id, user_message)
+        now = now_local()
         _, session = self.identity_service.ensure_user_and_session(user_id)
+        logger.debug(
+            "Session ensured | user_id=%s | session_id=%s | turn_count=%s",
+            user_id,
+            session.session_id,
+            session.turn_count,
+        )
 
         last_session_emotion = self._session_emotion.get(session.session_id, 0.0)
         message_score = self.emotion_engine.score_message(user_message)
         emotion_state = self.emotion_engine.update(last_session_emotion, message_score)
         self._session_emotion[session.session_id] = emotion_state.session_emotion
+        logger.info(
+            "Emotion updated | user_id=%s | session_id=%s | message_score=%.3f | session_emotion=%.3f | global_emotion=%.3f",
+            user_id,
+            session.session_id,
+            message_score,
+            emotion_state.session_emotion,
+            emotion_state.global_emotion,
+        )
 
         self.memory_writer.write(
             session_id=session.session_id,
@@ -68,8 +87,15 @@ class ChatOrchestrator:
             content=user_message,
             emotion_score=message_score,
         )
+        logger.debug("User message persisted | user_id=%s | session_id=%s", user_id, session.session_id)
 
         memories = self._retrieve_memories(user_id=user_id, query=user_message)
+        logger.info("Memories retrieved | user_id=%s | count=%s", user_id, len(memories))
+        logger.debug(
+            "Retrieved memory snippets | user_id=%s | memories=%s",
+            user_id,
+            [m.sanitized_content for m in memories],
+        )
         persona = self.persona_engine.get_runtime_persona(now)
         prompt_ctx = self.prompt_composer.compose(
             now=now,
@@ -79,6 +105,13 @@ class ChatOrchestrator:
             memories=memories,
             user_message=user_message,
         )
+        logger.debug(
+            "Prompt context composed | user_id=%s | system_core_len=%s | system_runtime_len=%s | memory_context_len=%s",
+            user_id,
+            len(prompt_ctx.system_core),
+            len(prompt_ctx.system_runtime),
+            len(prompt_ctx.memory_context),
+        )
 
         reply = self.llm_client.generate_reply(
             prompt_context=prompt_ctx,
@@ -87,6 +120,8 @@ class ChatOrchestrator:
             global_emotion=emotion_state.global_emotion,
             include_notice=session.turn_count == 0 and settings.persona.policy_notice_on_first_turn,
         )
+        logger.info("LLM reply generated | user_id=%s | reply_len=%s", user_id, len(reply))
+        logger.debug("LLM reply text | user_id=%s | reply=%s", user_id, reply)
 
         self.memory_writer.write(
             session_id=session.session_id,
@@ -95,9 +130,16 @@ class ChatOrchestrator:
             content=reply,
             emotion_score=emotion_state.session_emotion,
         )
+        logger.debug("Assistant message persisted | user_id=%s | session_id=%s", user_id, session.session_id)
 
         session.turn_count += 1
         self.identity_service.session_repo.upsert(session)
+        logger.info(
+            "Chat handling finished | user_id=%s | session_id=%s | turn_count=%s",
+            user_id,
+            session.session_id,
+            session.turn_count,
+        )
         return ChatResult(
             session_id=session.session_id,
             reply=reply,

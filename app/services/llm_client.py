@@ -42,6 +42,7 @@ class LLMClient:
             return []
         client = self._get_client()
         try:
+            logger.info("Listing models via provider=%s", provider)
             models = client.models.list()
             return sorted({item.id for item in models.data if getattr(item, "id", None)})
         except Exception as exc:
@@ -87,6 +88,17 @@ class LLMClient:
             logger.warning("LLM provider is kilo but api_key is empty, fallback to mock.")
             return ""
         client = self._get_client()
+        logger.info(
+            "Calling kilo chat completion | model=%s | base_url=%s",
+            settings.llm.model,
+            settings.llm.base_url,
+        )
+        logger.debug(
+            "Kilo request payload summary | system_len=%s | user_len=%s | temperature=%.2f",
+            len(self._build_system_prompt(prompt_context)),
+            len(prompt_context.user_message),
+            settings.llm.temperature,
+        )
         try:
             response = client.chat.completions.create(
                 model=settings.llm.model,
@@ -97,6 +109,7 @@ class LLMClient:
                 ],
             )
             content = response.choices[0].message.content if response.choices else ""
+            logger.info("Kilo response received | content_len=%s", len(content or ""))
             return (content or "").strip()
         except Exception as exc:
             logger.warning("Kilo request failed, fallback to mock: %s", exc)

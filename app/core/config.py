@@ -6,6 +6,7 @@ class AppConfig(BaseModel):
     name: str = "Social Persona AI"
     env: str = "dev"
     debug: bool = True
+    timezone: str = "Asia/Shanghai"
 
 
 class StorageConfig(BaseModel):

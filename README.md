@@ -20,6 +20,12 @@ pip install -e .[dev]
 uvicorn app.main:app --reload
 ```
 
+或使用一键脚本：
+
+```powershell
+.\start.ps1
+```
+
 默认会在项目根目录创建 `social_persona_ai.db`。
 
 ## 配置
@@ -35,3 +41,9 @@ Copy-Item .env.example .env
 ```powershell
 python -m pytest
 ```
+
+## 日志
+
+- 终端：`INFO` 及以上
+- 正常日志文件：`logs/app_info_YYYYMMDD_HHMMSS.log`（每次启动新文件，永久保留）
+- Debug 详尽日志：`logs/app_debug_latest.log`（每次启动覆盖）
