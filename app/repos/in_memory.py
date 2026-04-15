@@ -116,6 +116,26 @@ class InMemoryVectorRepo(VectorRepo):
             self._heat[memory.message_id] = min(1.0, current + 0.12)
         return selected
 
+    def run_maintenance(self) -> dict[str, int]:
+        updated = 0
+        removed = 0
+        for message_id, value in list(self._heat.items()):
+            new_value = max(0.0, value - 0.02)
+            if abs(new_value - value) > 1e-9:
+                self._heat[message_id] = new_value
+                updated += 1
+        return {"updated": updated, "removed": removed}
+
+    def run_maintenance(self) -> dict[str, int]:
+        updated = 0
+        removed = 0
+        for message_id, value in list(self._heat.items()):
+            new_value = max(0.0, value - 0.02)
+            if abs(new_value - value) > 1e-9:
+                self._heat[message_id] = new_value
+                updated += 1
+        return {"updated": updated, "removed": removed}
+
 
 class InMemoryFactRepo(FactRepo):
     def __init__(self) -> None:

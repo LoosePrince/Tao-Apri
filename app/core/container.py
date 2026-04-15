@@ -3,6 +3,8 @@ from app.domain.services.emotion_engine import EmotionEngine
 from app.domain.services.identity_service import IdentityService
 from app.domain.services.memory_writer import MemoryWriter
 from app.domain.services.persona_engine import PersonaEngine
+from app.jobs.emotion_aggregator import EmotionAggregatorJob
+from app.jobs.periodic_scheduler import PeriodicScheduler
 from app.jobs.task_queue import TaskQueue
 from app.repos.sqlite_repo import (
     SQLiteEmotionStateRepo,
@@ -53,6 +55,21 @@ class Container:
             enabled=settings.jobs.enabled,
             worker_count=settings.jobs.worker_count,
             queue_size=settings.jobs.queue_size,
+        )
+        self.emotion_aggregator_job = EmotionAggregatorJob(
+            message_repo=self.message_repo,
+            emotion_engine=self.emotion_engine,
+        )
+        self.periodic_scheduler = PeriodicScheduler(enabled=settings.jobs.maintenance_enabled)
+        self.periodic_scheduler.add_job(
+            name="emotion_aggregation",
+            interval_seconds=settings.jobs.maintenance_interval_seconds,
+            job=lambda: self.emotion_aggregator_job.run(window_minutes=settings.jobs.emotion_window_minutes),
+        )
+        self.periodic_scheduler.add_job(
+            name="vector_maintenance",
+            interval_seconds=settings.jobs.maintenance_interval_seconds,
+            job=self.vector_repo.run_maintenance,
         )
         self.chat_orchestrator = ChatOrchestrator(
             identity_service=self.identity_service,

@@ -510,6 +510,36 @@ class SQLiteVectorRepo(VectorRepo):
             self.store.conn.commit()
         return [item[1] for item in selected]
 
+    def run_maintenance(self) -> dict[str, int]:
+        now = datetime.now(timezone.utc)
+        updated = 0
+        removed = 0
+        rows = self.store.conn.execute(
+            "SELECT message_id, heat_score, last_accessed_at, created_at FROM vector_index"
+        ).fetchall()
+        for row in rows:
+            created_at_text = row["created_at"]
+            last_accessed_at_text = row["last_accessed_at"] or created_at_text
+            last_accessed_at = datetime.fromisoformat(last_accessed_at_text)
+            days_since_access = max(0.0, (now - last_accessed_at).total_seconds() / (24 * 60 * 60))
+            heat_score = float(row["heat_score"])
+            decayed = max(0.0, heat_score - settings.retrieval.heat_decay_per_day * days_since_access)
+            if abs(decayed - heat_score) > 1e-9:
+                self.store.conn.execute(
+                    "UPDATE vector_index SET heat_score = ?, last_accessed_at = ? WHERE message_id = ?",
+                    (decayed, now.isoformat(), row["message_id"]),
+                )
+                updated += 1
+            if decayed <= 0.0 and days_since_access > settings.retrieval.recency_window_days * 1.5:
+                self.store.conn.execute(
+                    "DELETE FROM vector_index WHERE message_id = ?",
+                    (row["message_id"],),
+                )
+                removed += 1
+        if updated or removed:
+            self.store.conn.commit()
+        return {"updated": updated, "removed": removed}
+
 
 class SQLiteEmotionStateRepo(EmotionStateRepo):
     def __init__(self, store: SQLiteStore) -> None:

@@ -52,6 +52,9 @@ class VectorRepo(ABC):
         recency_window_days: int = 30,
     ) -> list[Message]: ...
 
+    @abstractmethod
+    def run_maintenance(self) -> dict[str, int]: ...
+
 
 class EmotionStateRepo(ABC):
     @abstractmethod
