@@ -99,6 +99,7 @@ class ChatOrchestrator:
         persona = self.persona_engine.get_runtime_persona(now)
         prompt_ctx = self.prompt_composer.compose(
             now=now,
+            viewer_user_id=user_id,
             persona=persona,
             session_emotion=emotion_state.session_emotion,
             global_emotion=emotion_state.global_emotion,
