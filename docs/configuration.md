@@ -30,13 +30,13 @@
 - `PERSONA__POLICY_NOTICE_ON_FIRST_TURN`：首轮是否提示非私密声明
 - `PERSONA__ASSETS_DIR`：人设/提示词 Markdown 资源目录（默认 `prompt_assets`）
 
-- `LLM__PROVIDER`：`mock` 或 `kilo`
+- `LLM__PROVIDER`：当前建议固定 `kilo`
 - `LLM__MODEL`：模型名（例如免费模型名）
 - `LLM__API_KEY`：Kilo 网关密钥
-- `LLM__BASE_URL`：Kilo 网关地址（默认 `https://gateway.kilo.ai/v1`）
+- `LLM__BASE_URL`：Kilo 网关地址（默认 `https://api.kilo.ai/api/gateway`）
 - `LLM__TIMEOUT_SECONDS`：模型请求超时秒数
 
-说明：`kilo` provider 使用 OpenAI 官方 Python SDK，以 OpenAI 兼容模式连接 Kilo 网关。
+说明：`kilo` provider 使用 OpenAI 官方 Python SDK，以 OpenAI 兼容模式连接 Kilo 网关；当网关不可用时，系统将统一返回“当前不可用，请联系管理员（debug账号）”，不再回退 mock 回复。
 
 ## OneBot 11 配置
 

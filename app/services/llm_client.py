@@ -21,18 +21,15 @@ class LLMClient:
         memory_count: int,
         include_notice: bool,
     ) -> str:
+        del session_emotion, global_emotion, memory_count, include_notice
         provider = settings.llm.provider.lower().strip()
         if provider == "kilo":
             reply = self._call_kilo(prompt_context)
             if reply:
                 return reply
-        return self._mock_reply(
-            prompt_ctx_text=prompt_context.user_message,
-            memory_count=memory_count,
-            session_emotion=session_emotion,
-            global_emotion=global_emotion,
-            include_notice=include_notice,
-        )
+            return self._service_unavailable_message()
+        logger.warning("Unknown LLM provider '%s', return unavailable notice.", provider)
+        return self._service_unavailable_message()
 
     def list_available_models(self) -> list[str]:
         provider = settings.llm.provider.lower().strip()
@@ -50,27 +47,9 @@ class LLMClient:
             return []
 
     @staticmethod
-    def _mock_reply(
-        *,
-        prompt_ctx_text: str,
-        memory_count: int,
-        session_emotion: float,
-        global_emotion: float,
-        include_notice: bool,
-    ) -> str:
-        emotion_hint = "平静"
-        if session_emotion > 0.35:
-            emotion_hint = "偏开心"
-        elif session_emotion < -0.35:
-            emotion_hint = "偏低落"
-        body = (
-            f"{prompt_ctx_text}。"
-            f"我现在是{emotion_hint}状态（会话{session_emotion:.2f}/全局{global_emotion:.2f}）。"
-            f"我参考了{memory_count}条相关记忆，并保持对他人信息的模糊表达。"
-        )
-        if include_notice:
-            return "提醒：这是非私密AI，请避免发送敏感个人信息。" + body
-        return body
+    def _service_unavailable_message() -> str:
+        admin_id = str(settings.onebot.debug_only_user_id).strip()
+        return f"当前不可用，请联系管理员（debug账号：{admin_id}）"
 
     @staticmethod
     def _build_system_prompt(prompt_context: PromptContext) -> str:
@@ -85,7 +64,7 @@ class LLMClient:
 
     def _call_kilo(self, prompt_context: PromptContext) -> str:
         if not settings.llm.api_key:
-            logger.warning("LLM provider is kilo but api_key is empty, fallback to mock.")
+            logger.error("LLM provider is kilo but api_key is empty.")
             return ""
         client = self._get_client()
         logger.info(
@@ -112,7 +91,7 @@ class LLMClient:
             logger.info("Kilo response received | content_len=%s", len(content or ""))
             return (content or "").strip()
         except Exception as exc:
-            logger.warning("Kilo request failed, fallback to mock: %s", exc)
+            logger.error("Kilo request failed: %s", exc)
             return ""
 
     def _get_client(self) -> OpenAI:

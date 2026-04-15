@@ -35,10 +35,10 @@ class PersonaConfig(BaseModel):
 
 
 class LLMConfig(BaseModel):
-    provider: str = "mock"
+    provider: str = "kilo"
     model: str = "kilo-free"
     api_key: str = ""
-    base_url: str = "https://gateway.kilo.ai/v1"
+    base_url: str = "https://api.kilo.ai/api/gateway"
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     timeout_seconds: float = Field(default=30.0, ge=5.0, le=120.0)
 

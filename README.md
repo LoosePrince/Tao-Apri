@@ -9,7 +9,7 @@
 - 模糊化写入与事实记忆抽取
 - SQLite 单文件存储 + 内置向量检索（低流量场景）
 - OneBot 11 WebSocket 接入（QQ 私聊）
-- 可切换 LLM Provider（mock / Kilo Gateway）
+- Kilo Gateway 模型接入（失败时返回统一不可用提示，不回退 mock）
 
 ## 运行
 
