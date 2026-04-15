@@ -55,6 +55,8 @@ class Container:
             enabled=settings.jobs.enabled,
             worker_count=settings.jobs.worker_count,
             queue_size=settings.jobs.queue_size,
+            max_retries=settings.jobs.max_retries,
+            dead_letter_limit=settings.jobs.dead_letter_limit,
         )
         self.emotion_aggregator_job = EmotionAggregatorJob(
             message_repo=self.message_repo,

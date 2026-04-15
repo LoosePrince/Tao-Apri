@@ -54,6 +54,8 @@ class JobsConfig(BaseModel):
     enabled: bool = False
     worker_count: int = Field(default=1, ge=1, le=4)
     queue_size: int = Field(default=1000, ge=10, le=10000)
+    max_retries: int = Field(default=2, ge=0, le=10)
+    dead_letter_limit: int = Field(default=200, ge=10, le=5000)
     maintenance_enabled: bool = False
     maintenance_interval_seconds: float = Field(default=60.0, ge=5.0, le=3600.0)
     emotion_window_minutes: int = Field(default=30, ge=5, le=240)
