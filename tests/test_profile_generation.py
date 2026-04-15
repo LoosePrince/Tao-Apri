@@ -69,12 +69,14 @@ def _build_orchestrator(db_path: str) -> tuple[ChatOrchestrator, SQLiteProfileRe
 
 def test_profile_generated_and_persisted_after_messages(tmp_path) -> None:
     orchestrator, profile_repo, _ = _build_orchestrator(str(tmp_path / "profile.db"))
-    orchestrator.handle_message(user_id="u_profile", user_message="我最近学习压力有点大")
-    orchestrator.handle_message(user_id="u_profile", user_message="我喜欢晚上复习，也不想被打扰")
+    orchestrator.handle_message(user_id="u_profile", user_message="我最近学习压力有点大，叫我阿林")
+    orchestrator.handle_message(user_id="u_profile", user_message="我喜欢晚上复习，也不想被打扰，聊天随意点")
     profile = profile_repo.get("u_profile")
     assert profile is not None
     assert "学习与考试" in profile.profile_summary
     assert profile.preference_summary.strip() != ""
+    assert profile.preferred_address == "阿林"
+    assert profile.tone_preference == "偏轻松口语"
     assert profile.schedule_state.strip() != ""
     assert 0.0 <= profile.fatigue_level <= 1.0
     assert 0.0 <= profile.emotion_peak_level <= 1.0
@@ -125,3 +127,72 @@ def test_profile_context_differs_by_user_expression_style(tmp_path) -> None:
     ).reply
     assert "表达更简短直接" in short_reply
     assert "表达相对完整，愿意展开描述" in long_reply
+
+
+def test_group_emotion_context_injected_into_profile_context(tmp_path) -> None:
+    store = SQLiteStore(str(tmp_path / "group_emotion.db"))
+    user_repo = SQLiteUserRepo(store)
+    session_repo = SQLiteSessionRepo(store)
+    message_repo = SQLiteMessageRepo(store)
+    fact_repo = SQLiteFactRepo(store)
+    vector_repo = SQLiteVectorRepo(store)
+    emotion_state_repo = SQLiteEmotionStateRepo(store)
+    relation_repo = SQLiteRelationRepo(store)
+    preference_repo = SQLitePreferenceRepo(store)
+    profile_repo = SQLiteProfileRepo(store)
+    identity_service = IdentityService(user_repo, session_repo)
+    memory_writer = MemoryWriter(message_repo=message_repo, vector_repo=vector_repo, fact_repo=fact_repo)
+    memory_writer.write(
+        session_id="s_other",
+        user_id="u_other",
+        role="user",
+        content="今天太开心了",
+        emotion_score=0.9,
+    )
+    orchestrator = ChatOrchestrator(
+        identity_service=identity_service,
+        persona_engine=PersonaEngine(),
+        emotion_engine=EmotionEngine(state_repo=emotion_state_repo),
+        message_repo=message_repo,
+        vector_repo=vector_repo,
+        relation_repo=relation_repo,
+        preference_repo=preference_repo,
+        profile_repo=profile_repo,
+        memory_writer=memory_writer,
+        prompt_composer=PromptComposer(),
+        llm_client=ProfileEchoLLMClient(),  # type: ignore[arg-type]
+    )
+    reply = orchestrator.handle_message(user_id="u_viewer", user_message="我最近在复习").reply
+    assert "群体情绪：整体偏积极" in reply
+
+
+def test_long_term_memory_affects_address_and_tone_context(tmp_path) -> None:
+    store = SQLiteStore(str(tmp_path / "long_term_tone.db"))
+    user_repo = SQLiteUserRepo(store)
+    session_repo = SQLiteSessionRepo(store)
+    message_repo = SQLiteMessageRepo(store)
+    fact_repo = SQLiteFactRepo(store)
+    vector_repo = SQLiteVectorRepo(store)
+    emotion_state_repo = SQLiteEmotionStateRepo(store)
+    relation_repo = SQLiteRelationRepo(store)
+    preference_repo = SQLitePreferenceRepo(store)
+    profile_repo = SQLiteProfileRepo(store)
+    identity_service = IdentityService(user_repo, session_repo)
+    memory_writer = MemoryWriter(message_repo=message_repo, vector_repo=vector_repo, fact_repo=fact_repo)
+    orchestrator = ChatOrchestrator(
+        identity_service=identity_service,
+        persona_engine=PersonaEngine(),
+        emotion_engine=EmotionEngine(state_repo=emotion_state_repo),
+        message_repo=message_repo,
+        vector_repo=vector_repo,
+        relation_repo=relation_repo,
+        preference_repo=preference_repo,
+        profile_repo=profile_repo,
+        memory_writer=memory_writer,
+        prompt_composer=PromptComposer(),
+        llm_client=ProfileEchoLLMClient(),  # type: ignore[arg-type]
+    )
+    orchestrator.handle_message(user_id="u_mem", user_message="叫我小北，正式一点")
+    reply = orchestrator.handle_message(user_id="u_mem", user_message="今天聊聊状态").reply
+    assert "称呼偏好：优先称呼用户为“小北”" in reply
+    assert "语气偏好：偏正式克制" in reply

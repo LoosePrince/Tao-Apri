@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 import logging
 from collections import Counter
+import re
 
 from app.core.clock import now_local
 from app.core.config import settings
@@ -108,14 +109,14 @@ class ChatOrchestrator:
         session_emotion: float,
         global_emotion: float,
         current_hour: int,
-    ) -> tuple[str, str, str, float, float]:
+    ) -> tuple[str, str, str, str, str, float, float]:
         recent_messages = self.message_repo.list_by_user(
             user_id=user_id,
             limit=settings.profile.recent_message_limit,
         )
         user_texts = [msg.sanitized_content.strip() for msg in recent_messages if msg.role == "user" and msg.sanitized_content.strip()]
         if not user_texts:
-            return "", "", "", 0.0, 0.0
+            return "", "", "", "", "", 0.0, 0.0
 
         topic_counter = Counter(self._infer_topic(text) for text in user_texts)
         top_topics = [topic for topic, _ in topic_counter.most_common(3)]
@@ -129,6 +130,17 @@ class ChatOrchestrator:
             if any(keyword in text for keyword in ("不想", "讨厌", "别", "不要")):
                 preference_cues.append("会明确表达边界与不偏好")
         preference_summary = "；".join(dict.fromkeys(preference_cues)) or "偏好信息有限，建议继续观察。"
+        preferred_address = ""
+        for text in user_texts:
+            if "叫我" in text:
+                after = text.split("叫我", 1)[1]
+                parts = re.split(r"[，。！？!?,；;、\s]+", after, maxsplit=1)
+                preferred_address = (parts[0] if parts else "").strip()[:12]
+        tone_preference = "自然中性"
+        if any(token in text for text in user_texts for token in ("严肃一点", "正式一点", "别太口语")):
+            tone_preference = "偏正式克制"
+        elif any(token in text for text in user_texts for token in ("随意点", "轻松点", "幽默一点", "别太严肃")):
+            tone_preference = "偏轻松口语"
 
         schedule_state = "常规节奏"
         primary_topic = top_topics[0] if top_topics else "日常近况"
@@ -157,7 +169,15 @@ class ChatOrchestrator:
         emotion_peak_level = self._clamp01(max(peak_from_messages, abs(session_emotion), abs(global_emotion)))
 
         profile_summary = f"近期关注话题：{topic_text}；{style_text}。"
-        return profile_summary, preference_summary, schedule_state, fatigue_level, emotion_peak_level
+        return (
+            profile_summary,
+            preference_summary,
+            preferred_address,
+            tone_preference,
+            schedule_state,
+            fatigue_level,
+            emotion_peak_level,
+        )
 
     @staticmethod
     def _clamp01(value: float) -> float:
@@ -206,6 +226,25 @@ class ChatOrchestrator:
             relation.intimacy_score,
             relation.dependency_score,
         )
+
+    def _build_group_emotion_context(self, *, viewer_user_id: str) -> tuple[float, str]:
+        recent_all = self.message_repo.list_all(limit=120)
+        cross_user_msgs = [
+            message
+            for message in recent_all
+            if message.user_id != viewer_user_id and message.role == "user"
+        ]
+        if not cross_user_msgs:
+            return 0.0, "群体情绪：中性平稳。"
+        recent_scores = [msg.emotion_score for msg in cross_user_msgs[-20:]]
+        avg = sum(recent_scores) / max(1, len(recent_scores))
+        if avg >= 0.25:
+            tone = "群体情绪：整体偏积极，回复可更主动和鼓励。"
+        elif avg <= -0.25:
+            tone = "群体情绪：整体偏低落，回复应更稳重并增加共情。"
+        else:
+            tone = "群体情绪：中性平稳。"
+        return avg, tone
 
     @staticmethod
     def _infer_topic(text: str) -> str:
@@ -335,6 +374,8 @@ class ChatOrchestrator:
         (
             profile_summary_generated,
             preference_summary_generated,
+            preferred_address_generated,
+            tone_preference_generated,
             schedule_state_generated,
             fatigue_level_generated,
             emotion_peak_generated,
@@ -350,16 +391,20 @@ class ChatOrchestrator:
                     user_id=user_id,
                     profile_summary=profile_summary_generated,
                     preference_summary=preference_summary_generated,
+                    preferred_address=preferred_address_generated,
+                    tone_preference=tone_preference_generated,
                     schedule_state=schedule_state_generated,
                     fatigue_level=fatigue_level_generated,
                     emotion_peak_level=emotion_peak_generated,
                 )
             )
             logger.info(
-                "Profile updated | user_id=%s | profile_summary=%s | preference_summary=%s | schedule_state=%s | fatigue_level=%.3f | emotion_peak=%.3f",
+                "Profile updated | user_id=%s | profile_summary=%s | preference_summary=%s | preferred_address=%s | tone_preference=%s | schedule_state=%s | fatigue_level=%.3f | emotion_peak=%.3f",
                 user_id,
                 profile_summary_generated,
                 preference_summary_generated,
+                preferred_address_generated,
+                tone_preference_generated,
                 schedule_state_generated,
                 fatigue_level_generated,
                 emotion_peak_generated,
@@ -428,11 +473,17 @@ class ChatOrchestrator:
         profile_summary = ""
         if profile:
             profile_parts = [profile.profile_summary.strip(), profile.preference_summary.strip()]
+            if profile.preferred_address.strip():
+                profile_parts.append(f"称呼偏好：优先称呼用户为“{profile.preferred_address.strip()}”")
+            if profile.tone_preference.strip():
+                profile_parts.append(f"语气偏好：{profile.tone_preference.strip()}")
             if profile.schedule_state.strip():
                 profile_parts.append(f"周期状态：{profile.schedule_state.strip()}")
             profile_parts.append(f"疲惫度：{profile.fatigue_level:.2f}")
             profile_parts.append(f"情绪波峰：{profile.emotion_peak_level:.2f}")
             profile_summary = "\n".join(part for part in profile_parts if part)
+        group_emotion_avg, group_emotion_text = self._build_group_emotion_context(viewer_user_id=user_id)
+        profile_summary = (profile_summary + "\n" + group_emotion_text).strip() if profile_summary else group_emotion_text
         logger.debug(
             "Profile selected for prompt | user_id=%s | has_profile=%s | profile_len=%s",
             user_id,
@@ -440,13 +491,14 @@ class ChatOrchestrator:
             len(profile_summary),
         )
         logger.info(
-            "Generation chain | user_id=%s | relation_allowed=%s | relation_denied=%s | similarity_denied=%s | preference_denied=%s | profile_injected=%s",
+            "Generation chain | user_id=%s | relation_allowed=%s | relation_denied=%s | similarity_denied=%s | preference_denied=%s | profile_injected=%s | group_emotion_avg=%.3f",
             user_id,
             access_stats["cross_allowed"],
             access_stats["relation_denied"],
             access_stats["similarity_denied"],
             access_stats["preference_denied"],
             bool(profile_summary),
+            group_emotion_avg,
         )
         persona = self.persona_engine.get_runtime_persona(now)
         prompt_ctx = self.prompt_composer.compose(
