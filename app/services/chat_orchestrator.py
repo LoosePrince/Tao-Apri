@@ -469,6 +469,18 @@ class ChatOrchestrator:
             user_id,
             [m.sanitized_content for m in memories],
         )
+        logger.info(
+            "Retrieval explainability | user_id=%s | entries=%s",
+            user_id,
+            [
+                {
+                    "message_id": m.message_id,
+                    "user_id": m.user_id,
+                    "meta": m.retrieval_meta,
+                }
+                for m in memories
+            ],
+        )
         profile = self.profile_repo.get(user_id)
         profile_summary = ""
         if profile:

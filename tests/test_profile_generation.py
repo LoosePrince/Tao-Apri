@@ -85,13 +85,19 @@ def test_profile_generated_and_persisted_after_messages(tmp_path) -> None:
 def test_user_ai_relation_state_evolves_after_conversation(tmp_path) -> None:
     orchestrator, _, relation_repo = _build_orchestrator(str(tmp_path / "relation_state.db"))
     orchestrator.handle_message(user_id="u_rel", user_message="我最近状态不好，你能给我建议吗")
+    first = relation_repo.get("u_rel", "assistant")
     orchestrator.handle_message(user_id="u_rel", user_message="这件事只能靠你告诉我怎么办")
+    second = relation_repo.get("u_rel", "assistant")
+    assert first is not None
     relation = relation_repo.get("u_rel", "assistant")
     assert relation is not None
     assert relation.intimacy_score > 0.0
     assert relation.trust_score > 0.0
     assert relation.dependency_score > 0.0
     assert relation.strength > 0.0
+    assert second is not None
+    assert second.strength > first.strength
+    assert second.dependency_score >= first.dependency_score
 
 
 def test_profile_context_differs_by_user_expression_style(tmp_path) -> None:
@@ -127,6 +133,7 @@ def test_profile_context_differs_by_user_expression_style(tmp_path) -> None:
     ).reply
     assert "表达更简短直接" in short_reply
     assert "表达相对完整，愿意展开描述" in long_reply
+    assert short_reply != long_reply
 
 
 def test_group_emotion_context_injected_into_profile_context(tmp_path) -> None:

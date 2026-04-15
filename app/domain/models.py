@@ -29,6 +29,7 @@ class Message:
     session_id: str
     emotion_score: float = 0.0
     related_user_ids: list[str] = field(default_factory=list)
+    retrieval_meta: dict[str, float | int | str] = field(default_factory=dict)
 
 
 @dataclass(slots=True)

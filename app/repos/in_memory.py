@@ -75,9 +75,11 @@ class InMemoryMessageRepo(MessageRepo):
 class InMemoryVectorRepo(VectorRepo):
     def __init__(self) -> None:
         self._memories: list[Message] = []
+        self._heat: dict[str, float] = {}
 
     def add_memory(self, message: Message) -> None:
         self._memories.append(message)
+        self._heat[message.message_id] = 0.0
 
     def search(
         self,
@@ -92,11 +94,27 @@ class InMemoryVectorRepo(VectorRepo):
             # Prefer current user + related memories, but keep non-isolated option.
             is_related = memory.user_id == user_id or user_id in memory.related_user_ids
             base_score = _jaccard_score(query, memory.sanitized_content)
-            boosted = base_score + (0.2 if is_related else 0.0)
+            heat = self._heat.get(memory.message_id, 0.0)
+            relation_boost = 0.2 if is_related else 0.0
+            heat_boost = 0.15 * heat
+            boosted = base_score + relation_boost + heat_boost
             if boosted >= min_score:
+                memory.retrieval_meta = {
+                    "base_score": round(base_score, 6),
+                    "relation_boost": round(relation_boost, 6),
+                    "heat_boost": round(heat_boost, 6),
+                    "decayed_heat": round(heat, 6),
+                    "days_since_access": 0.0,
+                    "access_count": 0,
+                    "final_score": round(boosted, 6),
+                }
                 scored.append((boosted, memory))
         scored.sort(key=lambda item: item[0], reverse=True)
-        return [item[1] for item in scored[:limit]]
+        selected = [item[1] for item in scored[:limit]]
+        for memory in selected:
+            current = self._heat.get(memory.message_id, 0.0)
+            self._heat[memory.message_id] = min(1.0, current + 0.12)
+        return selected
 
 
 class InMemoryFactRepo(FactRepo):

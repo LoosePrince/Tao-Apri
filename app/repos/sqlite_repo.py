@@ -3,6 +3,7 @@ import math
 import sqlite3
 from datetime import datetime, timezone
 
+from app.core.config import settings
 from app.domain.models import (
     MemoryFact,
     Message,
@@ -102,7 +103,10 @@ class SQLiteStore:
                 sanitized_content TEXT NOT NULL,
                 embedding TEXT NOT NULL,
                 created_at TEXT NOT NULL,
-                time_bucket TEXT NOT NULL
+                time_bucket TEXT NOT NULL,
+                heat_score REAL NOT NULL DEFAULT 0,
+                access_count INTEGER NOT NULL DEFAULT 0,
+                last_accessed_at TEXT NOT NULL DEFAULT ''
             );
             CREATE TABLE IF NOT EXISTS emotion_state (
                 key TEXT PRIMARY KEY,
@@ -151,6 +155,18 @@ class SQLiteStore:
         if "time_bucket" not in vector_columns:
             self.conn.execute(
                 "ALTER TABLE vector_index ADD COLUMN time_bucket TEXT NOT NULL DEFAULT ''"
+            )
+        if "heat_score" not in vector_columns:
+            self.conn.execute(
+                "ALTER TABLE vector_index ADD COLUMN heat_score REAL NOT NULL DEFAULT 0"
+            )
+        if "access_count" not in vector_columns:
+            self.conn.execute(
+                "ALTER TABLE vector_index ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0"
+            )
+        if "last_accessed_at" not in vector_columns:
+            self.conn.execute(
+                "ALTER TABLE vector_index ADD COLUMN last_accessed_at TEXT NOT NULL DEFAULT ''"
             )
         relation_columns = {
             row["name"]
@@ -303,6 +319,7 @@ class SQLiteMessageRepo(MessageRepo):
             session_id=row["session_id"],
             emotion_score=float(row["emotion_score"]),
             related_user_ids=json.loads(row["related_user_ids"]),
+            retrieval_meta={},
         )
 
     def list_by_user(self, user_id: str, limit: int = 20) -> list[Message]:
@@ -385,9 +402,9 @@ class SQLiteVectorRepo(VectorRepo):
         self.store.conn.execute(
             """
             INSERT INTO vector_index (
-                message_id, user_id, related_user_ids, sanitized_content, embedding, created_at, time_bucket
+                message_id, user_id, related_user_ids, sanitized_content, embedding, created_at, time_bucket, heat_score, access_count, last_accessed_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(message_id) DO UPDATE SET
                 user_id = excluded.user_id,
                 related_user_ids = excluded.related_user_ids,
@@ -404,6 +421,9 @@ class SQLiteVectorRepo(VectorRepo):
                 json.dumps(vec),
                 message.created_at.isoformat(),
                 time_bucket,
+                0.0,
+                0,
+                "",
             ),
         )
         self.store.conn.commit()
@@ -418,17 +438,18 @@ class SQLiteVectorRepo(VectorRepo):
     ) -> list[Message]:
         query_vec = _embedding(query)
         cutoff = datetime.now(timezone.utc).timestamp() - (recency_window_days * 24 * 60 * 60)
+        now = datetime.now(timezone.utc)
         rows = self.store.conn.execute(
             """
             SELECT
                 m.message_id, m.user_id, m.role, m.raw_content, m.sanitized_content,
                 m.created_at, m.session_id, m.emotion_score, m.related_user_ids,
-                v.embedding, v.created_at as v_created_at
+                v.embedding, v.created_at as v_created_at, v.heat_score, v.access_count, v.last_accessed_at
             FROM vector_index v
             JOIN messages m ON m.message_id = v.message_id
             """
         ).fetchall()
-        scored: list[tuple[float, Message]] = []
+        scored: list[tuple[float, Message, float]] = []
         for row in rows:
             created_at_text = row["v_created_at"] or row["created_at"]
             if datetime.fromisoformat(created_at_text).timestamp() < cutoff:
@@ -436,7 +457,14 @@ class SQLiteVectorRepo(VectorRepo):
             related_user_ids = json.loads(row["related_user_ids"])
             base = _cosine(query_vec, json.loads(row["embedding"]))
             is_related = row["user_id"] == user_id or user_id in related_user_ids
-            score = base + (0.2 if is_related else 0.0)
+            last_accessed_at_text = row["last_accessed_at"] or created_at_text
+            last_accessed_at = datetime.fromisoformat(last_accessed_at_text)
+            days_since_access = max(0.0, (now - last_accessed_at).total_seconds() / (24 * 60 * 60))
+            stored_heat = float(row["heat_score"])
+            decayed_heat = max(0.0, stored_heat - settings.retrieval.heat_decay_per_day * days_since_access)
+            relation_boost = 0.2 if is_related else 0.0
+            heat_boost = settings.retrieval.heat_boost_weight * decayed_heat
+            score = base + relation_boost + heat_boost
             if score < min_score:
                 continue
             scored.append(
@@ -452,11 +480,35 @@ class SQLiteVectorRepo(VectorRepo):
                         session_id=row["session_id"],
                         emotion_score=float(row["emotion_score"]),
                         related_user_ids=related_user_ids,
+                        retrieval_meta={
+                            "base_score": round(base, 6),
+                            "relation_boost": round(relation_boost, 6),
+                            "heat_boost": round(heat_boost, 6),
+                            "decayed_heat": round(decayed_heat, 6),
+                            "days_since_access": round(days_since_access, 6),
+                            "access_count": int(row["access_count"]),
+                            "final_score": round(score, 6),
+                        },
                     ),
+                    decayed_heat,
                 )
             )
         scored.sort(key=lambda item: item[0], reverse=True)
-        return [item[1] for item in scored[:limit]]
+        selected = scored[:limit]
+        now_iso = now.isoformat()
+        for _, message, decayed_heat in selected:
+            new_heat = min(1.0, decayed_heat + settings.retrieval.heat_increment_on_access)
+            self.store.conn.execute(
+                """
+                UPDATE vector_index
+                SET heat_score = ?, access_count = access_count + 1, last_accessed_at = ?
+                WHERE message_id = ?
+                """,
+                (new_heat, now_iso, message.message_id),
+            )
+        if selected:
+            self.store.conn.commit()
+        return [item[1] for item in selected]
 
 
 class SQLiteEmotionStateRepo(EmotionStateRepo):
