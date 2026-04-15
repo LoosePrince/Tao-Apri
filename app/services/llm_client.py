@@ -214,6 +214,9 @@ class LLMClient:
         logger.warning("Unknown LLM provider '%s', return unavailable notice.", provider)
         return self._service_unavailable_message()
 
+    def is_unavailable_reply(self, reply: str) -> bool:
+        return (reply or "").strip() == self._service_unavailable_message().strip()
+
     def list_available_models(self) -> list[str]:
         provider = settings.llm.provider.lower().strip()
         if provider != "kilo":

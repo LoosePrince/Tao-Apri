@@ -117,12 +117,15 @@ class ChatOrchestrator:
         session_emotion: float,
         global_emotion: float,
         current_hour: int,
+        pending_user_text: str = "",
     ) -> tuple[str, str, str, str, str, float, float]:
         recent_messages = self.message_repo.list_by_user(
             user_id=user_id,
             limit=settings.profile.recent_message_limit,
         )
         user_texts = [msg.sanitized_content.strip() for msg in recent_messages if msg.role == "user" and msg.sanitized_content.strip()]
+        if pending_user_text.strip():
+            user_texts.append(pending_user_text.strip())
         if not user_texts:
             return "", "", "", "", "", 0.0, 0.0
         decision = self.llm_client.generate_profile_decision(
@@ -309,14 +312,6 @@ class ChatOrchestrator:
             emotion_state.global_emotion,
         )
 
-        self.memory_writer.write(
-            session_id=session.session_id,
-            user_id=user_id,
-            role="user",
-            content=user_message,
-            emotion_score=message_score,
-        )
-        logger.debug("User message persisted | user_id=%s | session_id=%s", user_id, session.session_id)
         (
             profile_summary_generated,
             preference_summary_generated,
@@ -330,6 +325,7 @@ class ChatOrchestrator:
             session_emotion=emotion_state.session_emotion,
             global_emotion=emotion_state.global_emotion,
             current_hour=now.hour,
+            pending_user_text=user_message,
         )
         if profile_summary_generated:
             generated_profile = UserProfile(
@@ -498,6 +494,28 @@ class ChatOrchestrator:
         )
         logger.info("LLM reply generated | user_id=%s | reply_len=%s", user_id, len(reply))
         logger.debug("LLM reply text | user_id=%s | reply=%s", user_id, reply)
+
+        if self.llm_client.is_unavailable_reply(reply):
+            logger.warning(
+                "Chat failed, skip message persistence | user_id=%s | session_id=%s",
+                user_id,
+                session.session_id,
+            )
+            return ChatResult(
+                session_id=session.session_id,
+                reply=reply,
+                session_emotion=emotion_state.session_emotion,
+                global_emotion=emotion_state.global_emotion,
+            )
+
+        self.memory_writer.write(
+            session_id=session.session_id,
+            user_id=user_id,
+            role="user",
+            content=user_message,
+            emotion_score=message_score,
+        )
+        logger.debug("User message persisted | user_id=%s | session_id=%s", user_id, session.session_id)
 
         self.memory_writer.write(
             session_id=session.session_id,
