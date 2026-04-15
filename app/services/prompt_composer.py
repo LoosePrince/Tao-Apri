@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import re
 
-from app.core.markdown_assets import read_markdown_asset
+from app.core.markdown_assets import read_required_markdown_asset
 from app.domain.models import Message
 from app.domain.services.persona_engine import PersonaSnapshot
 
@@ -54,28 +54,33 @@ class PromptComposer:
         return "日常近况"
 
     def _build_memory_context(self, viewer_user_id: str, memories: list[Message]) -> str:
+        self_header = read_required_markdown_asset("prompt/memory_self_header.md")
+        self_item_template = read_required_markdown_asset("prompt/memory_self_item.md")
+        cross_header = read_required_markdown_asset("prompt/memory_cross_header.md")
+        cross_summary_template = read_required_markdown_asset("prompt/memory_cross_summary.md")
+        empty_context = read_required_markdown_asset("prompt/memory_empty.md")
         self_lines: list[str] = []
         cross_topics: list[str] = []
         for memory in memories:
             safe_text = self._redact_identifiable_detail(memory.sanitized_content).strip()
             if memory.user_id == viewer_user_id:
                 if safe_text:
-                    self_lines.append(f"- (self/{memory.role}) {safe_text[:120]}")
+                    self_lines.append(
+                        self_item_template.format(role=memory.role, text=safe_text[:120])
+                    )
                 continue
             cross_topics.append(self._infer_topic(safe_text))
 
         memory_lines: list[str] = []
         if self_lines:
-            memory_lines.append("### 当前用户相关记忆")
+            memory_lines.append(self_header)
             memory_lines.extend(self_lines[:6])
         if cross_topics:
             topic_summary = "、".join(sorted(set(cross_topics))[:4])
-            memory_lines.append("### 跨对话模糊参考")
-            memory_lines.append(
-                f"- 其他对话大概涉及：{topic_summary}。仅可用于把握整体语境，禁止输出任何可识别细节或原句。"
-            )
+            memory_lines.append(cross_header)
+            memory_lines.append(cross_summary_template.format(topic_summary=topic_summary))
 
-        return "\n".join(memory_lines) if memory_lines else "- 暂无相关记忆"
+        return "\n".join(memory_lines) if memory_lines else empty_context
 
     def compose(
         self,
@@ -90,7 +95,7 @@ class PromptComposer:
         user_message: str,
     ) -> PromptContext:
         memory_context = self._build_memory_context(viewer_user_id=viewer_user_id, memories=memories)
-        core_template = read_markdown_asset("prompt/system_core.md")
+        core_template = read_required_markdown_asset("prompt/system_core.md")
         system_core = self._render_template(
             core_template,
             {
@@ -100,12 +105,7 @@ class PromptComposer:
                 "social_bias": persona.social_bias,
             },
         )
-        if not system_core:
-            system_core = (
-                f"你是 {persona.name}。{persona.self_awareness} "
-                f"{persona.style} {persona.social_bias}"
-            )
-        runtime_template = read_markdown_asset("prompt/system_runtime.md")
+        runtime_template = read_required_markdown_asset("prompt/system_runtime.md")
         system_runtime = self._render_template(
             runtime_template,
             {
@@ -115,22 +115,13 @@ class PromptComposer:
                 "global_emotion": global_emotion,
             },
         )
-        if not system_runtime:
-            system_runtime = (
-                f"当前时间: {now.isoformat()}。{persona.time_context} "
-                f"会话情绪={session_emotion:.2f}，全局情绪偏移={global_emotion:.2f}。"
-            )
-        policy_notice = read_markdown_asset("prompt/policy_notice.md")
-        if not policy_notice:
-            policy_notice = (
-                "提示用户：这是非私密AI，不建议输入敏感个人信息。"
-                "可引用他人信息时必须使用模糊摘要，不给出可识别细节。"
-            )
+        policy_notice = read_required_markdown_asset("prompt/policy_notice.md")
+        default_profile_context = read_required_markdown_asset("prompt/default_profile_context.md")
         return PromptContext(
             system_core=system_core,
             system_runtime=system_runtime,
             memory_context=memory_context,
             policy_notice=policy_notice,
-            profile_context=viewer_profile_summary.strip() or "暂无稳定画像，保持谨慎表达。",
+            profile_context=viewer_profile_summary.strip() or default_profile_context,
             user_message=user_message,
         )

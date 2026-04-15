@@ -3,6 +3,7 @@ import logging
 
 from app.core.clock import now_local
 from app.core.config import settings
+from app.core.markdown_assets import read_required_markdown_asset
 from app.domain.models import Message
 from app.domain.services.emotion_engine import EmotionEngine
 from app.domain.services.identity_service import IdentityService
@@ -59,6 +60,43 @@ class ChatOrchestrator:
             limit=settings.retrieval.top_k,
             min_score=settings.retrieval.min_score,
             recency_window_days=settings.retrieval.recency_window_days,
+        )
+
+    @staticmethod
+    def _merge_memories_by_id(memories: list[Message]) -> list[Message]:
+        seen: set[str] = set()
+        merged: list[Message] = []
+        for memory in memories:
+            if memory.message_id in seen:
+                continue
+            seen.add(memory.message_id)
+            merged.append(memory)
+        return merged
+
+    @staticmethod
+    def _render_template(template: str, values: dict[str, object]) -> str:
+        return template.format(**values)
+
+    def _build_retrieval_report(
+        self,
+        *,
+        retrieved_memories: list[Message],
+        latest_queries: list[str],
+        latest_batch_count: int,
+        remaining_retrievals: int,
+    ) -> str:
+        latest_memory_lines = [f"- {memory.sanitized_content[:120]}" for memory in retrieved_memories[-5:]]
+        latest_memories = "\n".join(latest_memory_lines) if latest_memory_lines else "- 无"
+        report_template = read_required_markdown_asset("prompt/retrieval_iteration_report.md")
+        return self._render_template(
+            report_template,
+            {
+                "latest_queries": ", ".join(latest_queries) if latest_queries else "无",
+                "latest_batch_count": latest_batch_count,
+                "total_memory_count": len(retrieved_memories),
+                "remaining_retrievals": remaining_retrievals,
+                "latest_memories": latest_memories,
+            },
         )
 
     @staticmethod
@@ -173,22 +211,67 @@ class ChatOrchestrator:
         )
         logger.debug("User message persisted | user_id=%s | session_id=%s", user_id, session.session_id)
 
-        memories = self._retrieve_memories(user_id=user_id, query=user_message)
+        retrieval_plan = None
+        retrieval_round = 0
+        retrieved: list[Message] = []
+        remaining_retrievals = settings.retrieval.max_rounds
+        latest_queries: list[str] = []
+        latest_batch_count = 0
+        while remaining_retrievals > 0:
+            retrieval_report = self._build_retrieval_report(
+                retrieved_memories=retrieved,
+                latest_queries=latest_queries,
+                latest_batch_count=latest_batch_count,
+                remaining_retrievals=remaining_retrievals,
+            )
+            retrieval_plan = self.llm_client.plan_retrieval(
+                user_message=user_message,
+                retrieval_report=retrieval_report,
+                remaining_retrievals=remaining_retrievals,
+            )
+            if not retrieval_plan.should_retrieve:
+                break
+            latest_queries = retrieval_plan.queries
+            round_batch: list[Message] = []
+            for query in latest_queries:
+                round_batch.extend(self._retrieve_memories(user_id=user_id, query=query))
+            before_merge = len(retrieved)
+            retrieved = self._merge_memories_by_id(retrieved + round_batch)
+            latest_batch_count = len(retrieved) - before_merge
+            retrieval_round += 1
+            remaining_retrievals -= 1
+            if latest_batch_count <= 0:
+                continue
+
+        if retrieval_plan is None:
+            retrieval_plan = self.llm_client.plan_retrieval(
+                user_message=user_message,
+                retrieval_report="",
+                remaining_retrievals=remaining_retrievals,
+            )
+        memories = retrieved
         memories, cross_access_denied = self._apply_cross_access_control(
             viewer_user_id=user_id,
             query=user_message,
             memories=memories,
         )
-        logger.info("Memories retrieved | user_id=%s | count=%s", user_id, len(memories))
+        logger.info(
+            "Memories retrieved | user_id=%s | count=%s | rounds=%s | should_retrieve=%s | queries=%s | reason=%s | remaining=%s",
+            user_id,
+            len(memories),
+            retrieval_round,
+            retrieval_plan.should_retrieve,
+            retrieval_plan.queries,
+            retrieval_plan.reason,
+            remaining_retrievals,
+        )
         logger.debug(
             "Retrieved memory snippets | user_id=%s | memories=%s",
             user_id,
             [m.sanitized_content for m in memories],
         )
         profile = self.profile_repo.get(user_id)
-        profile_summary = (
-            profile.profile_summary if profile and profile.profile_summary.strip() else "该用户偏好自然交流，避免过度确定表达。"
-        )
+        profile_summary = profile.profile_summary if profile and profile.profile_summary.strip() else ""
         persona = self.persona_engine.get_runtime_persona(now)
         prompt_ctx = self.prompt_composer.compose(
             now=now,

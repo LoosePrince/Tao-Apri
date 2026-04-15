@@ -24,6 +24,7 @@ class EmotionConfig(BaseModel):
 
 class RetrievalConfig(BaseModel):
     top_k: int = Field(default=5, ge=1, le=50)
+    max_rounds: int = Field(default=3, ge=1, le=10)
     min_score: float = Field(default=0.2, ge=0.0, le=1.0)
     recency_window_days: int = Field(default=30, ge=1, le=365)
     cross_positive_threshold: float = Field(default=0.2, ge=0.0, le=1.0)
@@ -36,6 +37,10 @@ class PersonaConfig(BaseModel):
     name: str = "LinXi"
     policy_notice_on_first_turn: bool = True
     assets_dir: str = "prompt_assets"
+
+
+class SessionConfig(BaseModel):
+    renew_after_hours: float = Field(default=3.0, ge=0.1, le=168.0)
 
 
 class LLMConfig(BaseModel):
@@ -67,6 +72,7 @@ class Settings(BaseSettings):
     emotion: EmotionConfig = EmotionConfig()
     retrieval: RetrievalConfig = RetrievalConfig()
     persona: PersonaConfig = PersonaConfig()
+    session: SessionConfig = SessionConfig()
     llm: LLMConfig = LLMConfig()
     onebot: OneBotConfig = OneBotConfig()
 

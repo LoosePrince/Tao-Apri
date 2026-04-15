@@ -1,12 +1,23 @@
 import logging
 import time
+import json
+import re
+from dataclasses import dataclass
 
 from openai import OpenAI
 
 from app.core.config import settings
+from app.core.markdown_assets import read_required_markdown_asset
 from app.services.prompt_composer import PromptContext
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class RetrievalPlan:
+    should_retrieve: bool
+    queries: list[str]
+    reason: str = ""
 
 
 class LLMClient:
@@ -14,6 +25,10 @@ class LLMClient:
         self._client: OpenAI | None = None
         self._consecutive_failures = 0
         self._circuit_open_until = 0.0
+
+    @staticmethod
+    def _render_template(template: str, values: dict[str, object]) -> str:
+        return template.format(**values)
 
     def generate_reply(
         self,
@@ -69,6 +84,80 @@ class LLMClient:
         logger.error("LLM startup health check failed: unable to list models.")
         return False
 
+    def plan_retrieval(
+        self,
+        *,
+        user_message: str,
+        retrieval_report: str,
+        remaining_retrievals: int,
+    ) -> RetrievalPlan:
+        provider = settings.llm.provider.lower().strip()
+        if provider != "kilo" or not settings.llm.api_key:
+            return RetrievalPlan(should_retrieve=True, queries=[user_message], reason="fallback:provider")
+        if self._is_circuit_open():
+            return RetrievalPlan(should_retrieve=True, queries=[user_message], reason="fallback:circuit_open")
+
+        planner_system = read_required_markdown_asset("prompt/retrieval_planner_system.md")
+        planner_user_template = read_required_markdown_asset("prompt/retrieval_planner_user.md")
+        planner_user = self._render_template(
+            planner_user_template,
+            {
+                "user_message": user_message,
+                "retrieval_report": retrieval_report,
+                "remaining_retrievals": remaining_retrievals,
+            },
+        )
+        client = self._get_client()
+        try:
+            response = client.chat.completions.create(
+                model=settings.llm.model,
+                temperature=0,
+                messages=[
+                    {"role": "system", "content": planner_system},
+                    {"role": "user", "content": planner_user},
+                ],
+            )
+            content = response.choices[0].message.content if response.choices else ""
+            self._on_request_success()
+            parsed = self._parse_retrieval_plan(content or "", user_message=user_message)
+            logger.debug(
+                "Retrieval plan generated | should_retrieve=%s | queries=%s | reason=%s",
+                parsed.should_retrieve,
+                parsed.queries,
+                parsed.reason,
+            )
+            return parsed
+        except Exception as exc:
+            self._on_request_failure(exc)
+            logger.warning("Retrieval plan generation failed, fallback to default query: %s", exc)
+            return RetrievalPlan(should_retrieve=True, queries=[user_message], reason="fallback:error")
+
+    @staticmethod
+    def _parse_retrieval_plan(raw: str, *, user_message: str) -> RetrievalPlan:
+        stripped = raw.strip()
+        if not stripped:
+            return RetrievalPlan(should_retrieve=True, queries=[user_message], reason="fallback:empty")
+        try:
+            data = json.loads(stripped)
+        except json.JSONDecodeError:
+            match = re.search(r"\{.*\}", stripped, flags=re.S)
+            if not match:
+                return RetrievalPlan(should_retrieve=True, queries=[user_message], reason="fallback:invalid_json")
+            try:
+                data = json.loads(match.group(0))
+            except json.JSONDecodeError:
+                return RetrievalPlan(should_retrieve=True, queries=[user_message], reason="fallback:invalid_json")
+
+        should_retrieve = bool(data.get("should_retrieve", True))
+        raw_queries = data.get("queries", [])
+        if not isinstance(raw_queries, list):
+            raw_queries = []
+        queries = [str(item).strip() for item in raw_queries if str(item).strip()][:3]
+        if should_retrieve and not queries:
+            queries = [user_message]
+        reason = str(data.get("reason", "")).strip()
+        return RetrievalPlan(should_retrieve=should_retrieve, queries=queries, reason=reason)
+
     @staticmethod
     def _service_unavailable_message() -> str:
         admin_id = str(settings.onebot.debug_only_user_id).strip()
@@ -76,14 +165,13 @@ class LLMClient:
 
     @staticmethod
     def _build_system_prompt(prompt_context: PromptContext) -> str:
-        return "\n\n".join(
-            [
-                prompt_context.system_core,
-                prompt_context.system_runtime,
-                "当前用户画像：\n" + prompt_context.profile_context,
-                "记忆上下文：\n" + prompt_context.memory_context,
-                "策略说明：\n" + prompt_context.policy_notice,
-            ]
+        wrapper_template = read_required_markdown_asset("prompt/system_wrapper.md")
+        return wrapper_template.format(
+            system_core=prompt_context.system_core,
+            system_runtime=prompt_context.system_runtime,
+            profile_context=prompt_context.profile_context,
+            memory_context=prompt_context.memory_context,
+            policy_notice=prompt_context.policy_notice,
         ).strip()
 
     def _call_kilo(self, prompt_context: PromptContext) -> str:
