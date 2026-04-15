@@ -56,6 +56,8 @@ class UserRelation:
     polarity: str = "neutral"  # positive | neutral | negative
     strength: float = 0.0
     trust_score: float = 0.0
+    intimacy_score: float = 0.0
+    dependency_score: float = 0.0
     updated_at: datetime | None = None
 
 

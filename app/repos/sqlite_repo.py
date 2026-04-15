@@ -115,6 +115,8 @@ class SQLiteStore:
                 polarity TEXT NOT NULL,
                 strength REAL NOT NULL,
                 trust_score REAL NOT NULL,
+                intimacy_score REAL NOT NULL DEFAULT 0,
+                dependency_score REAL NOT NULL DEFAULT 0,
                 updated_at TEXT NOT NULL,
                 PRIMARY KEY (source_user_id, target_user_id)
             );
@@ -144,6 +146,18 @@ class SQLiteStore:
         if "time_bucket" not in vector_columns:
             self.conn.execute(
                 "ALTER TABLE vector_index ADD COLUMN time_bucket TEXT NOT NULL DEFAULT ''"
+            )
+        relation_columns = {
+            row["name"]
+            for row in self.conn.execute("PRAGMA table_info(user_relations)").fetchall()
+        }
+        if "intimacy_score" not in relation_columns:
+            self.conn.execute(
+                "ALTER TABLE user_relations ADD COLUMN intimacy_score REAL NOT NULL DEFAULT 0"
+            )
+        if "dependency_score" not in relation_columns:
+            self.conn.execute(
+                "ALTER TABLE user_relations ADD COLUMN dependency_score REAL NOT NULL DEFAULT 0"
             )
         self.conn.commit()
 
@@ -449,7 +463,7 @@ class SQLiteRelationRepo(RelationRepo):
     def get(self, source_user_id: str, target_user_id: str) -> UserRelation | None:
         row = self.store.conn.execute(
             """
-            SELECT source_user_id, target_user_id, polarity, strength, trust_score, updated_at
+            SELECT source_user_id, target_user_id, polarity, strength, trust_score, intimacy_score, dependency_score, updated_at
             FROM user_relations
             WHERE source_user_id = ? AND target_user_id = ?
             """,
@@ -463,6 +477,8 @@ class SQLiteRelationRepo(RelationRepo):
             polarity=row["polarity"],
             strength=float(row["strength"]),
             trust_score=float(row["trust_score"]),
+            intimacy_score=float(row["intimacy_score"]),
+            dependency_score=float(row["dependency_score"]),
             updated_at=_parse_dt(row["updated_at"]),
         )
 
@@ -471,13 +487,15 @@ class SQLiteRelationRepo(RelationRepo):
         self.store.conn.execute(
             """
             INSERT INTO user_relations (
-                source_user_id, target_user_id, polarity, strength, trust_score, updated_at
+                source_user_id, target_user_id, polarity, strength, trust_score, intimacy_score, dependency_score, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(source_user_id, target_user_id) DO UPDATE SET
                 polarity = excluded.polarity,
                 strength = excluded.strength,
                 trust_score = excluded.trust_score,
+                intimacy_score = excluded.intimacy_score,
+                dependency_score = excluded.dependency_score,
                 updated_at = excluded.updated_at
             """,
             (
@@ -486,6 +504,8 @@ class SQLiteRelationRepo(RelationRepo):
                 relation.polarity,
                 relation.strength,
                 relation.trust_score,
+                relation.intimacy_score,
+                relation.dependency_score,
                 now,
             ),
         )

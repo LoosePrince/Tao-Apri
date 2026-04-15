@@ -5,7 +5,7 @@ from collections import Counter
 from app.core.clock import now_local
 from app.core.config import settings
 from app.core.markdown_assets import read_required_markdown_asset
-from app.domain.models import Message, UserProfile
+from app.domain.models import Message, UserProfile, UserRelation
 from app.domain.services.emotion_engine import EmotionEngine
 from app.domain.services.identity_service import IdentityService
 from app.domain.services.memory_writer import MemoryWriter
@@ -15,6 +15,7 @@ from app.services.llm_client import LLMClient
 from app.services.prompt_composer import PromptComposer
 
 logger = logging.getLogger(__name__)
+ASSISTANT_RELATION_ID = "assistant"
 
 
 @dataclass(slots=True)
@@ -123,6 +124,54 @@ class ChatOrchestrator:
         preference_summary = "；".join(dict.fromkeys(preference_cues)) or "偏好信息有限，建议继续观察。"
         profile_summary = f"近期关注话题：{topic_text}；{style_text}。"
         return profile_summary, preference_summary
+
+    @staticmethod
+    def _clamp01(value: float) -> float:
+        return max(0.0, min(1.0, value))
+
+    def _update_user_relation_state(self, *, user_id: str, user_message: str, reply: str) -> None:
+        relation = self.relation_repo.get(user_id, ASSISTANT_RELATION_ID) or UserRelation(
+            source_user_id=user_id,
+            target_user_id=ASSISTANT_RELATION_ID,
+        )
+        lowered = user_message.lower()
+        intimacy_delta = 0.03 + min(len(user_message), 120) / 3000.0
+        trust_delta = 0.02
+        dependency_delta = 0.0
+
+        if any(token in user_message for token in ("我觉得", "我最近", "我有点", "我很")):
+            intimacy_delta += 0.03
+        if any(token in user_message for token in ("你觉得", "你能", "帮我", "怎么办", "建议")):
+            trust_delta += 0.05
+        if any(token in user_message for token in ("你告诉我", "只能靠你", "离不开你", "全靠你")):
+            dependency_delta += 0.08
+        if any(token in lowered for token in ("滚", "烦", "讨厌", "闭嘴")):
+            intimacy_delta -= 0.06
+            trust_delta -= 0.08
+        if any(token in reply for token in ("可以", "建议", "陪你", "一起")):
+            trust_delta += 0.02
+
+        relation.intimacy_score = self._clamp01(relation.intimacy_score * 0.98 + intimacy_delta)
+        relation.trust_score = self._clamp01(relation.trust_score * 0.98 + trust_delta)
+        relation.dependency_score = self._clamp01(relation.dependency_score * 0.98 + dependency_delta)
+        relation.strength = round((relation.intimacy_score + relation.trust_score) / 2.0, 4)
+        if relation.strength >= 0.65:
+            relation.polarity = "positive"
+        elif relation.strength <= 0.30:
+            relation.polarity = "negative"
+        else:
+            relation.polarity = "neutral"
+        self.relation_repo.upsert(relation)
+        logger.info(
+            "Relation evolved | user_id=%s | target=%s | polarity=%s | strength=%.3f | trust=%.3f | intimacy=%.3f | dependency=%.3f",
+            user_id,
+            ASSISTANT_RELATION_ID,
+            relation.polarity,
+            relation.strength,
+            relation.trust_score,
+            relation.intimacy_score,
+            relation.dependency_score,
+        )
 
     @staticmethod
     def _infer_topic(text: str) -> str:
@@ -382,6 +431,7 @@ class ChatOrchestrator:
             content=reply,
             emotion_score=emotion_state.session_emotion,
         )
+        self._update_user_relation_state(user_id=user_id, user_message=user_message, reply=reply)
         logger.debug("Assistant message persisted | user_id=%s | session_id=%s", user_id, session.session_id)
 
         session.turn_count += 1
