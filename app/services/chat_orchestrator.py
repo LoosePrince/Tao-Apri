@@ -117,6 +117,8 @@ class ChatOrchestrator:
         session_emotion: float,
         global_emotion: float,
         current_hour: int,
+        current_date: str,
+        current_year: int,
         pending_user_text: str = "",
     ) -> tuple[str, str, str, str, str, float, float]:
         recent_messages = self.message_repo.list_by_user(
@@ -131,6 +133,8 @@ class ChatOrchestrator:
         decision = self.llm_client.generate_profile_decision(
             user_texts=user_texts,
             current_hour=current_hour,
+            current_date=current_date,
+            current_year=current_year,
             session_emotion=session_emotion,
             global_emotion=global_emotion,
         )
@@ -325,6 +329,8 @@ class ChatOrchestrator:
             session_emotion=emotion_state.session_emotion,
             global_emotion=emotion_state.global_emotion,
             current_hour=now.hour,
+            current_date=now.date().isoformat(),
+            current_year=now.year,
             pending_user_text=user_message,
         )
         if profile_summary_generated:

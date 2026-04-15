@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import re
 from typing import Any
 from urllib.parse import urlparse, urlunparse
 
@@ -46,6 +47,8 @@ class OneBotWSClient:
         self.window_manager = window_manager
         self._stop_event = asyncio.Event()
         self._task: asyncio.Task | None = None
+        self._send_lock = asyncio.Lock()
+        self._inflight_tasks: set[asyncio.Task] = set()
 
     async def start(self) -> None:
         if not settings.onebot.enabled:
@@ -56,8 +59,78 @@ class OneBotWSClient:
 
     async def stop(self) -> None:
         self._stop_event.set()
+        inflight = list(self._inflight_tasks)
+        for task in inflight:
+            task.cancel()
+        if inflight:
+            await asyncio.gather(*inflight, return_exceptions=True)
         if self._task:
             await self._task
+
+    @staticmethod
+    def _split_reply_segments(reply: str) -> list[str]:
+        text = (reply or "").strip()
+        if not text:
+            return []
+        parts: list[str] = []
+        for block in re.split(r"\n\s*\n+", text):
+            block = block.strip()
+            if not block:
+                continue
+            sentence_parts = [item.strip() for item in re.split(r"(?<=[。！？!?])\s+", block) if item.strip()]
+            if sentence_parts:
+                parts.extend(sentence_parts)
+            else:
+                parts.append(block)
+        return parts or [text]
+
+    async def _send_reply_segments(self, ws: websockets.ClientConnection, *, user_id: int, reply: str) -> None:
+        segments = self._split_reply_segments(reply)
+        if not segments:
+            return
+        for segment in segments:
+            action_payload = {
+                "action": "send_private_msg",
+                "params": {
+                    "user_id": user_id,
+                    "message": segment,
+                },
+            }
+            logger.debug("OneBot send payload: %s", action_payload)
+            async with self._send_lock:
+                await ws.send(json.dumps(action_payload, ensure_ascii=False))
+            logger.info("OneBot reply segment sent | user_id=%s | len=%s", user_id, len(segment))
+
+    async def _process_message(
+        self,
+        ws: websockets.ClientConnection,
+        *,
+        user_id: int,
+        user_text: str,
+    ) -> None:
+        result = await asyncio.to_thread(
+            self.window_manager.process_user_message,
+            user_id=str(user_id),
+            user_message=user_text,
+        )
+        logger.info(
+            "OneBot message processed | user_id=%s | session_id=%s | session_emotion=%.3f | global_emotion=%.3f",
+            user_id,
+            result.session_id,
+            result.session_emotion,
+            result.global_emotion,
+        )
+        logger.debug("OneBot reply text: %s", result.reply)
+        await self._send_reply_segments(ws, user_id=user_id, reply=result.reply)
+
+    def _on_inflight_done(self, task: asyncio.Task) -> None:
+        self._inflight_tasks.discard(task)
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:  # pragma: no cover
+            logger.exception("OneBot async process failed: %s", exc)
 
     async def _run_loop(self) -> None:
         ws_url = _normalize_ws_url(settings.onebot.ws_url)
@@ -109,27 +182,6 @@ class OneBotWSClient:
             return
         logger.info("OneBot received private message | user_id=%s | text=%s", user_id, user_text)
         logger.debug("OneBot full event payload: %s", event)
-
-        result = self.window_manager.process_user_message(
-            user_id=str(user_id),
-            user_message=user_text,
-        )
-        logger.info(
-            "OneBot message processed | user_id=%s | session_id=%s | session_emotion=%.3f | global_emotion=%.3f",
-            user_id,
-            result.session_id,
-            result.session_emotion,
-            result.global_emotion,
-        )
-        logger.debug("OneBot reply text: %s", result.reply)
-
-        action_payload = {
-            "action": "send_private_msg",
-            "params": {
-                "user_id": user_id,
-                "message": result.reply,
-            },
-        }
-        logger.debug("OneBot send payload: %s", action_payload)
-        await ws.send(json.dumps(action_payload, ensure_ascii=False))
-        logger.info("OneBot reply sent | user_id=%s", user_id)
+        task = asyncio.create_task(self._process_message(ws, user_id=user_id, user_text=user_text))
+        self._inflight_tasks.add(task)
+        task.add_done_callback(self._on_inflight_done)

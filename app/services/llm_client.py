@@ -102,6 +102,8 @@ class LLMClient:
         *,
         user_texts: list[str],
         current_hour: int,
+        current_date: str,
+        current_year: int,
         session_emotion: float,
         global_emotion: float,
     ) -> dict[str, object]:
@@ -110,6 +112,8 @@ class LLMClient:
             user_asset="prompt/ai_profile_user.md",
             values={
                 "current_hour": current_hour,
+                "current_date": current_date,
+                "current_year": current_year,
                 "session_emotion": f"{session_emotion:.4f}",
                 "global_emotion": f"{global_emotion:.4f}",
                 "user_texts": "\n".join(f"- {item}" for item in user_texts) or "- 无",
