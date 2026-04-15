@@ -41,6 +41,11 @@ class LLMConfig(BaseModel):
     base_url: str = "https://api.kilo.ai/api/gateway"
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     timeout_seconds: float = Field(default=30.0, ge=5.0, le=120.0)
+    startup_healthcheck_enabled: bool = False
+    retry_max_attempts: int = Field(default=3, ge=1, le=10)
+    retry_backoff_seconds: float = Field(default=1.0, ge=0.0, le=30.0)
+    circuit_breaker_failure_threshold: int = Field(default=3, ge=1, le=50)
+    circuit_breaker_open_seconds: float = Field(default=30.0, ge=1.0, le=3600.0)
 
 
 class OneBotConfig(BaseModel):

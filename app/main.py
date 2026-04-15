@@ -58,6 +58,10 @@ def _log_startup_diagnostics() -> None:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     _log_startup_diagnostics()
+    if settings.llm.startup_healthcheck_enabled:
+        ok = container.llm_client.startup_health_check()
+        if not ok:
+            logger.error("LLM startup health check failed, service continues in degraded mode.")
     onebot_client = OneBotWSClient(container.chat_orchestrator)
     await onebot_client.start()
     try:

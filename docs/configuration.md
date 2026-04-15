@@ -35,6 +35,11 @@
 - `LLM__API_KEY`：Kilo 网关密钥
 - `LLM__BASE_URL`：Kilo 网关地址（默认 `https://api.kilo.ai/api/gateway`）
 - `LLM__TIMEOUT_SECONDS`：模型请求超时秒数
+- `LLM__STARTUP_HEALTHCHECK_ENABLED`：启动时是否执行 LLM 健康检查（失败仅记录日志，不阻断启动）
+- `LLM__RETRY_MAX_ATTEMPTS`：单次请求最大尝试次数（含首次）
+- `LLM__RETRY_BACKOFF_SECONDS`：重试退避基数（秒，按尝试次数线性增长）
+- `LLM__CIRCUIT_BREAKER_FAILURE_THRESHOLD`：连续失败达到阈值后开启熔断
+- `LLM__CIRCUIT_BREAKER_OPEN_SECONDS`：熔断开启时长（秒）
 
 说明：`kilo` provider 使用 OpenAI 官方 Python SDK，以 OpenAI 兼容模式连接 Kilo 网关；当网关不可用时，系统将统一返回“当前不可用，请联系管理员（debug账号）”，不再回退 mock 回复。
 
