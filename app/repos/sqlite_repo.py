@@ -1,0 +1,402 @@
+import json
+import math
+import sqlite3
+from datetime import datetime, timezone
+
+from app.domain.models import MemoryFact, Message, Session, User
+from app.repos.interfaces import EmotionStateRepo, FactRepo, MessageRepo, SessionRepo, UserRepo, VectorRepo
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _parse_dt(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    return datetime.fromisoformat(value)
+
+
+def _embedding(text: str, dim: int = 64) -> list[float]:
+    vec = [0.0] * dim
+    tokens = [token for token in text.lower().replace("，", " ").replace(",", " ").split() if token]
+    if not tokens:
+        return vec
+    for token in tokens:
+        idx = hash(token) % dim
+        vec[idx] += 1.0
+    norm = math.sqrt(sum(v * v for v in vec)) or 1.0
+    return [v / norm for v in vec]
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    if not a or not b:
+        return 0.0
+    return sum(x * y for x, y in zip(a, b))
+
+
+class SQLiteStore:
+    def __init__(self, db_path: str) -> None:
+        self.conn = sqlite3.connect(db_path, check_same_thread=False)
+        self.conn.row_factory = sqlite3.Row
+        self._init_schema()
+
+    def _init_schema(self) -> None:
+        cursor = self.conn.cursor()
+        cursor.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                user_id TEXT PRIMARY KEY,
+                nickname TEXT NULL,
+                first_seen_at TEXT NOT NULL,
+                last_active_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS sessions (
+                session_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL UNIQUE,
+                turn_count INTEGER NOT NULL DEFAULT 0,
+                last_seen_at TEXT NULL
+            );
+            CREATE TABLE IF NOT EXISTS messages (
+                message_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                raw_content TEXT NOT NULL,
+                sanitized_content TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                emotion_score REAL NOT NULL,
+                related_user_ids TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS memory_facts (
+                fact_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                source_message_id TEXT NOT NULL,
+                fact_text TEXT NOT NULL,
+                fact_type TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS vector_index (
+                message_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                related_user_ids TEXT NOT NULL,
+                sanitized_content TEXT NOT NULL,
+                embedding TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                time_bucket TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS emotion_state (
+                key TEXT PRIMARY KEY,
+                value REAL NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            """
+        )
+        vector_columns = {
+            row["name"]
+            for row in self.conn.execute("PRAGMA table_info(vector_index)").fetchall()
+        }
+        if "created_at" not in vector_columns:
+            self.conn.execute(
+                "ALTER TABLE vector_index ADD COLUMN created_at TEXT NOT NULL DEFAULT ''"
+            )
+        if "time_bucket" not in vector_columns:
+            self.conn.execute(
+                "ALTER TABLE vector_index ADD COLUMN time_bucket TEXT NOT NULL DEFAULT ''"
+            )
+        self.conn.commit()
+
+
+class SQLiteUserRepo(UserRepo):
+    def __init__(self, store: SQLiteStore) -> None:
+        self.store = store
+
+    def get(self, user_id: str) -> User | None:
+        row = self.store.conn.execute(
+            "SELECT user_id, nickname, first_seen_at, last_active_at FROM users WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+        if not row:
+            return None
+        return User(
+            user_id=row["user_id"],
+            nickname=row["nickname"],
+            first_seen_at=_parse_dt(row["first_seen_at"]),
+            last_active_at=_parse_dt(row["last_active_at"]),
+        )
+
+    def upsert(self, user: User) -> User:
+        now = _now_iso()
+        self.store.conn.execute(
+            """
+            INSERT INTO users (user_id, nickname, first_seen_at, last_active_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                nickname = COALESCE(excluded.nickname, users.nickname),
+                last_active_at = excluded.last_active_at
+            """,
+            (user.user_id, user.nickname, now, now),
+        )
+        self.store.conn.commit()
+        return self.get(user.user_id) or user
+
+
+class SQLiteSessionRepo(SessionRepo):
+    def __init__(self, store: SQLiteStore) -> None:
+        self.store = store
+
+    def get_by_user_id(self, user_id: str) -> Session | None:
+        row = self.store.conn.execute(
+            "SELECT session_id, user_id, turn_count, last_seen_at FROM sessions WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+        if not row:
+            return None
+        return Session(
+            session_id=row["session_id"],
+            user_id=row["user_id"],
+            turn_count=row["turn_count"],
+            last_seen_at=_parse_dt(row["last_seen_at"]),
+        )
+
+    def upsert(self, session: Session) -> Session:
+        self.store.conn.execute(
+            """
+            INSERT INTO sessions (session_id, user_id, turn_count, last_seen_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                session_id = excluded.session_id,
+                turn_count = excluded.turn_count,
+                last_seen_at = excluded.last_seen_at
+            """,
+            (
+                session.session_id,
+                session.user_id,
+                session.turn_count,
+                session.last_seen_at.isoformat() if session.last_seen_at else None,
+            ),
+        )
+        self.store.conn.commit()
+        return session
+
+
+class SQLiteMessageRepo(MessageRepo):
+    def __init__(self, store: SQLiteStore) -> None:
+        self.store = store
+
+    def add(self, message: Message) -> None:
+        self.store.conn.execute(
+            """
+            INSERT INTO messages (
+                message_id, user_id, role, raw_content, sanitized_content,
+                created_at, session_id, emotion_score, related_user_ids
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                message.message_id,
+                message.user_id,
+                message.role,
+                message.raw_content,
+                message.sanitized_content,
+                message.created_at.isoformat(),
+                message.session_id,
+                message.emotion_score,
+                json.dumps(message.related_user_ids, ensure_ascii=False),
+            ),
+        )
+        self.store.conn.commit()
+
+    @staticmethod
+    def _to_message(row: sqlite3.Row) -> Message:
+        return Message(
+            message_id=row["message_id"],
+            user_id=row["user_id"],
+            role=row["role"],
+            raw_content=row["raw_content"],
+            sanitized_content=row["sanitized_content"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            session_id=row["session_id"],
+            emotion_score=float(row["emotion_score"]),
+            related_user_ids=json.loads(row["related_user_ids"]),
+        )
+
+    def list_by_user(self, user_id: str, limit: int = 20) -> list[Message]:
+        rows = self.store.conn.execute(
+            """
+            SELECT * FROM messages
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (user_id, limit),
+        ).fetchall()
+        return [self._to_message(row) for row in reversed(rows)]
+
+    def list_all(self, limit: int = 200) -> list[Message]:
+        rows = self.store.conn.execute(
+            "SELECT * FROM messages ORDER BY created_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [self._to_message(row) for row in reversed(rows)]
+
+
+class SQLiteFactRepo(FactRepo):
+    def __init__(self, store: SQLiteStore) -> None:
+        self.store = store
+
+    def add(self, fact: MemoryFact) -> None:
+        self.store.conn.execute(
+            """
+            INSERT INTO memory_facts (
+                fact_id, user_id, source_message_id, fact_text, fact_type, confidence, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                fact.fact_id,
+                fact.user_id,
+                fact.source_message_id,
+                fact.fact_text,
+                fact.fact_type,
+                fact.confidence,
+                fact.created_at.isoformat(),
+            ),
+        )
+        self.store.conn.commit()
+
+    def list_by_user(self, user_id: str, limit: int = 50) -> list[MemoryFact]:
+        rows = self.store.conn.execute(
+            """
+            SELECT * FROM memory_facts
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (user_id, limit),
+        ).fetchall()
+        facts: list[MemoryFact] = []
+        for row in rows:
+            facts.append(
+                MemoryFact(
+                    fact_id=row["fact_id"],
+                    user_id=row["user_id"],
+                    source_message_id=row["source_message_id"],
+                    fact_text=row["fact_text"],
+                    fact_type=row["fact_type"],
+                    confidence=float(row["confidence"]),
+                    created_at=datetime.fromisoformat(row["created_at"]),
+                )
+            )
+        return facts
+
+
+class SQLiteVectorRepo(VectorRepo):
+    def __init__(self, store: SQLiteStore) -> None:
+        self.store = store
+
+    def add_memory(self, message: Message) -> None:
+        vec = _embedding(message.sanitized_content)
+        time_bucket = message.created_at.strftime("%Y-%m-%dT%H")
+        self.store.conn.execute(
+            """
+            INSERT INTO vector_index (
+                message_id, user_id, related_user_ids, sanitized_content, embedding, created_at, time_bucket
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(message_id) DO UPDATE SET
+                user_id = excluded.user_id,
+                related_user_ids = excluded.related_user_ids,
+                sanitized_content = excluded.sanitized_content,
+                embedding = excluded.embedding,
+                created_at = excluded.created_at,
+                time_bucket = excluded.time_bucket
+            """,
+            (
+                message.message_id,
+                message.user_id,
+                json.dumps(message.related_user_ids, ensure_ascii=False),
+                message.sanitized_content,
+                json.dumps(vec),
+                message.created_at.isoformat(),
+                time_bucket,
+            ),
+        )
+        self.store.conn.commit()
+
+    def search(
+        self,
+        query: str,
+        user_id: str,
+        limit: int = 5,
+        min_score: float = 0.2,
+        recency_window_days: int = 30,
+    ) -> list[Message]:
+        query_vec = _embedding(query)
+        cutoff = datetime.now(timezone.utc).timestamp() - (recency_window_days * 24 * 60 * 60)
+        rows = self.store.conn.execute(
+            """
+            SELECT
+                m.message_id, m.user_id, m.role, m.raw_content, m.sanitized_content,
+                m.created_at, m.session_id, m.emotion_score, m.related_user_ids,
+                v.embedding, v.created_at as v_created_at
+            FROM vector_index v
+            JOIN messages m ON m.message_id = v.message_id
+            """
+        ).fetchall()
+        scored: list[tuple[float, Message]] = []
+        for row in rows:
+            created_at_text = row["v_created_at"] or row["created_at"]
+            if datetime.fromisoformat(created_at_text).timestamp() < cutoff:
+                continue
+            related_user_ids = json.loads(row["related_user_ids"])
+            base = _cosine(query_vec, json.loads(row["embedding"]))
+            is_related = row["user_id"] == user_id or user_id in related_user_ids
+            score = base + (0.2 if is_related else 0.0)
+            if score < min_score:
+                continue
+            scored.append(
+                (
+                    score,
+                    Message(
+                        message_id=row["message_id"],
+                        user_id=row["user_id"],
+                        role=row["role"],
+                        raw_content=row["raw_content"],
+                        sanitized_content=row["sanitized_content"],
+                        created_at=datetime.fromisoformat(row["created_at"]),
+                        session_id=row["session_id"],
+                        emotion_score=float(row["emotion_score"]),
+                        related_user_ids=related_user_ids,
+                    ),
+                )
+            )
+        scored.sort(key=lambda item: item[0], reverse=True)
+        return [item[1] for item in scored[:limit]]
+
+
+class SQLiteEmotionStateRepo(EmotionStateRepo):
+    def __init__(self, store: SQLiteStore) -> None:
+        self.store = store
+
+    def get_global_emotion(self) -> float:
+        row = self.store.conn.execute(
+            "SELECT value FROM emotion_state WHERE key = 'global_emotion'"
+        ).fetchone()
+        if not row:
+            return 0.0
+        return float(row["value"])
+
+    def set_global_emotion(self, value: float) -> None:
+        self.store.conn.execute(
+            """
+            INSERT INTO emotion_state (key, value, updated_at)
+            VALUES ('global_emotion', ?, ?)
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = excluded.updated_at
+            """,
+            (value, _now_iso()),
+        )
+        self.store.conn.commit()
