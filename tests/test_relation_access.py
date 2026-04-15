@@ -17,10 +17,15 @@ from app.repos.sqlite_repo import (
     SQLiteVectorRepo,
 )
 from app.services.chat_orchestrator import ChatOrchestrator
+from app.services.llm_client import RetrievalPlan
 from app.services.prompt_composer import PromptComposer
 
 
 class EchoMemoryLLMClient:
+    def plan_retrieval(self, **kwargs) -> RetrievalPlan:  # noqa: ANN003
+        user_message = kwargs["user_message"]
+        return RetrievalPlan(should_retrieve=True, queries=[user_message], reason="test")
+
     def generate_reply(self, **kwargs) -> str:  # noqa: ANN003
         prompt_context = kwargs["prompt_context"]
         return prompt_context.memory_context

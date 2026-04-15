@@ -1,10 +1,11 @@
 from dataclasses import dataclass
 import logging
+from collections import Counter
 
 from app.core.clock import now_local
 from app.core.config import settings
 from app.core.markdown_assets import read_required_markdown_asset
-from app.domain.models import Message
+from app.domain.models import Message, UserProfile
 from app.domain.services.emotion_engine import EmotionEngine
 from app.domain.services.identity_service import IdentityService
 from app.domain.services.memory_writer import MemoryWriter
@@ -98,6 +99,30 @@ class ChatOrchestrator:
                 "latest_memories": latest_memories,
             },
         )
+
+    def _build_profile_summary(self, user_id: str) -> tuple[str, str]:
+        recent_messages = self.message_repo.list_by_user(
+            user_id=user_id,
+            limit=settings.profile.recent_message_limit,
+        )
+        user_texts = [msg.sanitized_content.strip() for msg in recent_messages if msg.role == "user" and msg.sanitized_content.strip()]
+        if not user_texts:
+            return "", ""
+
+        topic_counter = Counter(self._infer_topic(text) for text in user_texts)
+        top_topics = [topic for topic, _ in topic_counter.most_common(3)]
+        topic_text = "、".join(top_topics) if top_topics else "日常近况"
+        avg_len = sum(len(text) for text in user_texts) / max(1, len(user_texts))
+        style_text = "表达更简短直接" if avg_len < 20 else "表达相对完整，愿意展开描述"
+        preference_cues: list[str] = []
+        for text in user_texts:
+            if any(keyword in text for keyword in ("喜欢", "爱", "想要")):
+                preference_cues.append("偏好表达积极倾向")
+            if any(keyword in text for keyword in ("不想", "讨厌", "别", "不要")):
+                preference_cues.append("会明确表达边界与不偏好")
+        preference_summary = "；".join(dict.fromkeys(preference_cues)) or "偏好信息有限，建议继续观察。"
+        profile_summary = f"近期关注话题：{topic_text}；{style_text}。"
+        return profile_summary, preference_summary
 
     @staticmethod
     def _infer_topic(text: str) -> str:
@@ -210,6 +235,21 @@ class ChatOrchestrator:
             emotion_score=message_score,
         )
         logger.debug("User message persisted | user_id=%s | session_id=%s", user_id, session.session_id)
+        profile_summary_generated, preference_summary_generated = self._build_profile_summary(user_id)
+        if profile_summary_generated:
+            self.profile_repo.upsert(
+                UserProfile(
+                    user_id=user_id,
+                    profile_summary=profile_summary_generated,
+                    preference_summary=preference_summary_generated,
+                )
+            )
+            logger.info(
+                "Profile updated | user_id=%s | profile_summary=%s | preference_summary=%s",
+                user_id,
+                profile_summary_generated,
+                preference_summary_generated,
+            )
 
         retrieval_plan = None
         retrieval_round = 0
@@ -272,6 +312,12 @@ class ChatOrchestrator:
         )
         profile = self.profile_repo.get(user_id)
         profile_summary = profile.profile_summary if profile and profile.profile_summary.strip() else ""
+        logger.debug(
+            "Profile selected for prompt | user_id=%s | has_profile=%s | profile_len=%s",
+            user_id,
+            bool(profile_summary),
+            len(profile_summary),
+        )
         persona = self.persona_engine.get_runtime_persona(now)
         prompt_ctx = self.prompt_composer.compose(
             now=now,

@@ -43,6 +43,10 @@ class SessionConfig(BaseModel):
     renew_after_hours: float = Field(default=3.0, ge=0.1, le=168.0)
 
 
+class ProfileConfig(BaseModel):
+    recent_message_limit: int = Field(default=30, ge=5, le=200)
+
+
 class LLMConfig(BaseModel):
     provider: str = "kilo"
     model: str = "kilo-free"
@@ -73,6 +77,7 @@ class Settings(BaseSettings):
     retrieval: RetrievalConfig = RetrievalConfig()
     persona: PersonaConfig = PersonaConfig()
     session: SessionConfig = SessionConfig()
+    profile: ProfileConfig = ProfileConfig()
     llm: LLMConfig = LLMConfig()
     onebot: OneBotConfig = OneBotConfig()
 
