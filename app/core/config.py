@@ -50,6 +50,12 @@ class ProfileConfig(BaseModel):
     recent_message_limit: int = Field(default=30, ge=5, le=200)
 
 
+class JobsConfig(BaseModel):
+    enabled: bool = False
+    worker_count: int = Field(default=1, ge=1, le=4)
+    queue_size: int = Field(default=1000, ge=10, le=10000)
+
+
 class LLMConfig(BaseModel):
     provider: str = "kilo"
     model: str = "kilo-free"
@@ -81,6 +87,7 @@ class Settings(BaseSettings):
     persona: PersonaConfig = PersonaConfig()
     session: SessionConfig = SessionConfig()
     profile: ProfileConfig = ProfileConfig()
+    jobs: JobsConfig = JobsConfig()
     llm: LLMConfig = LLMConfig()
     onebot: OneBotConfig = OneBotConfig()
 

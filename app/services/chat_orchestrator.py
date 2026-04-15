@@ -11,6 +11,7 @@ from app.domain.services.emotion_engine import EmotionEngine
 from app.domain.services.identity_service import IdentityService
 from app.domain.services.memory_writer import MemoryWriter
 from app.domain.services.persona_engine import PersonaEngine
+from app.jobs.task_queue import TaskQueue
 from app.repos.interfaces import MessageRepo, PreferenceRepo, ProfileRepo, RelationRepo, VectorRepo
 from app.services.llm_client import LLMClient
 from app.services.prompt_composer import PromptComposer
@@ -42,6 +43,7 @@ class ChatOrchestrator:
         memory_writer: MemoryWriter,
         prompt_composer: PromptComposer,
         llm_client: LLMClient,
+        task_queue: TaskQueue,
     ) -> None:
         self.identity_service = identity_service
         self.persona_engine = persona_engine
@@ -54,6 +56,7 @@ class ChatOrchestrator:
         self.memory_writer = memory_writer
         self.prompt_composer = prompt_composer
         self.llm_client = llm_client
+        self.task_queue = task_queue
         self._session_emotion: dict[str, float] = {}
 
     def _retrieve_memories(self, user_id: str, query: str) -> list[Message]:
@@ -227,6 +230,9 @@ class ChatOrchestrator:
             relation.dependency_score,
         )
 
+    def _persist_profile(self, profile: UserProfile) -> None:
+        self.profile_repo.upsert(profile)
+
     def _build_group_emotion_context(self, *, viewer_user_id: str) -> tuple[float, str]:
         recent_all = self.message_repo.list_all(limit=120)
         cross_user_msgs = [
@@ -386,18 +392,17 @@ class ChatOrchestrator:
             current_hour=now.hour,
         )
         if profile_summary_generated:
-            self.profile_repo.upsert(
-                UserProfile(
-                    user_id=user_id,
-                    profile_summary=profile_summary_generated,
-                    preference_summary=preference_summary_generated,
-                    preferred_address=preferred_address_generated,
-                    tone_preference=tone_preference_generated,
-                    schedule_state=schedule_state_generated,
-                    fatigue_level=fatigue_level_generated,
-                    emotion_peak_level=emotion_peak_generated,
-                )
+            generated_profile = UserProfile(
+                user_id=user_id,
+                profile_summary=profile_summary_generated,
+                preference_summary=preference_summary_generated,
+                preferred_address=preferred_address_generated,
+                tone_preference=tone_preference_generated,
+                schedule_state=schedule_state_generated,
+                fatigue_level=fatigue_level_generated,
+                emotion_peak_level=emotion_peak_generated,
             )
+            self.task_queue.submit(self._persist_profile, generated_profile)
             logger.info(
                 "Profile updated | user_id=%s | profile_summary=%s | preference_summary=%s | preferred_address=%s | tone_preference=%s | schedule_state=%s | fatigue_level=%.3f | emotion_peak=%.3f",
                 user_id,
@@ -494,6 +499,17 @@ class ChatOrchestrator:
             profile_parts.append(f"疲惫度：{profile.fatigue_level:.2f}")
             profile_parts.append(f"情绪波峰：{profile.emotion_peak_level:.2f}")
             profile_summary = "\n".join(part for part in profile_parts if part)
+        elif profile_summary_generated:
+            profile_parts = [profile_summary_generated, preference_summary_generated]
+            if preferred_address_generated.strip():
+                profile_parts.append(f"称呼偏好：优先称呼用户为“{preferred_address_generated.strip()}”")
+            if tone_preference_generated.strip():
+                profile_parts.append(f"语气偏好：{tone_preference_generated.strip()}")
+            if schedule_state_generated.strip():
+                profile_parts.append(f"周期状态：{schedule_state_generated.strip()}")
+            profile_parts.append(f"疲惫度：{fatigue_level_generated:.2f}")
+            profile_parts.append(f"情绪波峰：{emotion_peak_generated:.2f}")
+            profile_summary = "\n".join(part for part in profile_parts if part)
         group_emotion_avg, group_emotion_text = self._build_group_emotion_context(viewer_user_id=user_id)
         profile_summary = (profile_summary + "\n" + group_emotion_text).strip() if profile_summary else group_emotion_text
         logger.debug(
@@ -550,7 +566,12 @@ class ChatOrchestrator:
             content=reply,
             emotion_score=emotion_state.session_emotion,
         )
-        self._update_user_relation_state(user_id=user_id, user_message=user_message, reply=reply)
+        self.task_queue.submit(
+            self._update_user_relation_state,
+            user_id=user_id,
+            user_message=user_message,
+            reply=reply,
+        )
         logger.debug("Assistant message persisted | user_id=%s | session_id=%s", user_id, session.session_id)
 
         session.turn_count += 1

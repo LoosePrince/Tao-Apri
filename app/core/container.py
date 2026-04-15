@@ -3,6 +3,7 @@ from app.domain.services.emotion_engine import EmotionEngine
 from app.domain.services.identity_service import IdentityService
 from app.domain.services.memory_writer import MemoryWriter
 from app.domain.services.persona_engine import PersonaEngine
+from app.jobs.task_queue import TaskQueue
 from app.repos.sqlite_repo import (
     SQLiteEmotionStateRepo,
     SQLiteFactRepo,
@@ -48,6 +49,11 @@ class Container:
         )
         self.prompt_composer = PromptComposer()
         self.llm_client = LLMClient()
+        self.task_queue = TaskQueue(
+            enabled=settings.jobs.enabled,
+            worker_count=settings.jobs.worker_count,
+            queue_size=settings.jobs.queue_size,
+        )
         self.chat_orchestrator = ChatOrchestrator(
             identity_service=self.identity_service,
             persona_engine=self.persona_engine,
@@ -60,6 +66,7 @@ class Container:
             memory_writer=self.memory_writer,
             prompt_composer=self.prompt_composer,
             llm_client=self.llm_client,
+            task_queue=self.task_queue,
         )
 
 

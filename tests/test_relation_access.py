@@ -4,6 +4,7 @@ from app.domain.services.emotion_engine import EmotionEngine
 from app.domain.services.identity_service import IdentityService
 from app.domain.services.memory_writer import MemoryWriter
 from app.domain.services.persona_engine import PersonaEngine
+from app.jobs.task_queue import TaskQueue
 from app.repos.sqlite_repo import (
     SQLiteEmotionStateRepo,
     SQLiteFactRepo,
@@ -56,6 +57,7 @@ def _build_orchestrator(db_path: str) -> tuple[ChatOrchestrator, MemoryWriter, S
         memory_writer=memory_writer,
         prompt_composer=PromptComposer(),
         llm_client=EchoMemoryLLMClient(),  # type: ignore[arg-type]
+        task_queue=TaskQueue(enabled=False, worker_count=1, queue_size=100),
     )
     return orchestrator, memory_writer, relation_repo, preference_repo
 

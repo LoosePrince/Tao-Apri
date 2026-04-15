@@ -2,6 +2,7 @@ from app.domain.services.emotion_engine import EmotionEngine
 from app.domain.services.identity_service import IdentityService
 from app.domain.services.memory_writer import MemoryWriter
 from app.domain.services.persona_engine import PersonaEngine
+from app.jobs.task_queue import TaskQueue
 from app.repos.sqlite_repo import (
     SQLiteEmotionStateRepo,
     SQLiteFactRepo,
@@ -63,6 +64,7 @@ def _build_orchestrator(db_path: str) -> tuple[ChatOrchestrator, SQLiteProfileRe
         memory_writer=memory_writer,
         prompt_composer=PromptComposer(),
         llm_client=EchoLLMClient(),  # type: ignore[arg-type]
+        task_queue=TaskQueue(enabled=False, worker_count=1, queue_size=100),
     )
     return orchestrator, profile_repo, relation_repo
 
@@ -125,6 +127,7 @@ def test_profile_context_differs_by_user_expression_style(tmp_path) -> None:
         memory_writer=memory_writer,
         prompt_composer=PromptComposer(),
         llm_client=ProfileEchoLLMClient(),  # type: ignore[arg-type]
+        task_queue=TaskQueue(enabled=False, worker_count=1, queue_size=100),
     )
     short_reply = orchestrator.handle_message(user_id="u_short", user_message="好困").reply
     long_reply = orchestrator.handle_message(
@@ -168,6 +171,7 @@ def test_group_emotion_context_injected_into_profile_context(tmp_path) -> None:
         memory_writer=memory_writer,
         prompt_composer=PromptComposer(),
         llm_client=ProfileEchoLLMClient(),  # type: ignore[arg-type]
+        task_queue=TaskQueue(enabled=False, worker_count=1, queue_size=100),
     )
     reply = orchestrator.handle_message(user_id="u_viewer", user_message="我最近在复习").reply
     assert "群体情绪：整体偏积极" in reply
@@ -198,6 +202,7 @@ def test_long_term_memory_affects_address_and_tone_context(tmp_path) -> None:
         memory_writer=memory_writer,
         prompt_composer=PromptComposer(),
         llm_client=ProfileEchoLLMClient(),  # type: ignore[arg-type]
+        task_queue=TaskQueue(enabled=False, worker_count=1, queue_size=100),
     )
     orchestrator.handle_message(user_id="u_mem", user_message="叫我小北，正式一点")
     reply = orchestrator.handle_message(user_id="u_mem", user_message="今天聊聊状态").reply
