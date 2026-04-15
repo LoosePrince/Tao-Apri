@@ -8,7 +8,7 @@ import websockets
 from websockets.exceptions import ConnectionClosed
 
 from app.core.config import settings
-from app.services.chat_orchestrator import ChatOrchestrator
+from app.services.conversation_window_manager import ConversationWindowManager
 
 logger = logging.getLogger(__name__)
 
@@ -42,8 +42,8 @@ def _extract_text_from_array_message(message: Any) -> str:
 
 
 class OneBotWSClient:
-    def __init__(self, chat_orchestrator: ChatOrchestrator) -> None:
-        self.chat_orchestrator = chat_orchestrator
+    def __init__(self, window_manager: ConversationWindowManager) -> None:
+        self.window_manager = window_manager
         self._stop_event = asyncio.Event()
         self._task: asyncio.Task | None = None
 
@@ -110,7 +110,7 @@ class OneBotWSClient:
         logger.info("OneBot received private message | user_id=%s | text=%s", user_id, user_text)
         logger.debug("OneBot full event payload: %s", event)
 
-        result = self.chat_orchestrator.handle_message(
+        result = self.window_manager.process_user_message(
             user_id=str(user_id),
             user_message=user_text,
         )

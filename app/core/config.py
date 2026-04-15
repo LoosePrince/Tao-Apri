@@ -75,6 +75,19 @@ class LLMConfig(BaseModel):
     circuit_breaker_open_seconds: float = Field(default=30.0, ge=1.0, le=3600.0)
 
 
+class RhythmConfig(BaseModel):
+    enabled: bool = True
+    silence_seconds: float = Field(default=15.0, ge=1.0, le=120.0)
+    max_think_seconds: float = Field(default=45.0, ge=5.0, le=300.0)
+    cooldown_seconds: float = Field(default=2.0, ge=0.0, le=30.0)
+    single_message_char_threshold: int = Field(default=200, ge=20, le=5000)
+    single_message_token_threshold: int = Field(default=400, ge=20, le=8000)
+    window_char_threshold: int = Field(default=600, ge=50, le=20000)
+    window_token_threshold: int = Field(default=1200, ge=50, le=40000)
+    terminate_keywords: list[str] = Field(default_factory=lambda: ["算了", "不用了", "当我没说"])
+    wait_timeout_seconds: float = Field(default=90.0, ge=5.0, le=600.0)
+
+
 class OneBotConfig(BaseModel):
     enabled: bool = False
     ws_url: str = "http://127.0.0.1:6700"
@@ -94,6 +107,7 @@ class Settings(BaseSettings):
     profile: ProfileConfig = ProfileConfig()
     jobs: JobsConfig = JobsConfig()
     llm: LLMConfig = LLMConfig()
+    rhythm: RhythmConfig = RhythmConfig()
     onebot: OneBotConfig = OneBotConfig()
 
     model_config = SettingsConfigDict(

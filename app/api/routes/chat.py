@@ -10,7 +10,7 @@ router = APIRouter()
 
 @router.post("", response_model=ChatResponse)
 def chat(payload: ChatRequest) -> ChatResponse:
-    result = container.chat_orchestrator.handle_message(
+    result = container.window_manager.process_user_message(
         user_id=payload.user_id,
         user_message=payload.message,
     )

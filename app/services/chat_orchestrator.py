@@ -4,6 +4,7 @@ import json
 
 from app.core.clock import now_local
 from app.core.config import settings
+from app.core.metrics import MetricsRegistry
 from app.core.markdown_assets import read_required_markdown_asset
 from app.domain.models import Message, UserProfile, UserRelation
 from app.domain.services.emotion_engine import EmotionEngine
@@ -14,6 +15,7 @@ from app.jobs.task_queue import TaskQueue
 from app.repos.interfaces import MessageRepo, PreferenceRepo, ProfileRepo, RelationRepo, VectorRepo
 from app.services.llm_client import LLMClient
 from app.services.prompt_composer import PromptComposer
+from app.services.window_preprocessor import WindowPreprocessor
 
 logger = logging.getLogger(__name__)
 ASSISTANT_RELATION_ID = "assistant"
@@ -43,6 +45,8 @@ class ChatOrchestrator:
         prompt_composer: PromptComposer,
         llm_client: LLMClient,
         task_queue: TaskQueue,
+        window_preprocessor: WindowPreprocessor,
+        metrics: MetricsRegistry,
     ) -> None:
         self.identity_service = identity_service
         self.persona_engine = persona_engine
@@ -56,6 +60,8 @@ class ChatOrchestrator:
         self.prompt_composer = prompt_composer
         self.llm_client = llm_client
         self.task_queue = task_queue
+        self.window_preprocessor = window_preprocessor
+        self.metrics = metrics
         self._session_emotion: dict[str, float] = {}
 
     def _retrieve_memories(self, user_id: str, query: str) -> list[Message]:
@@ -267,6 +273,18 @@ class ChatOrchestrator:
         }
 
     def handle_message(self, *, user_id: str, user_message: str) -> ChatResult:
+        return self.handle_window_batch(user_id=user_id, user_messages=[user_message], abort_requested=False)
+
+    def handle_window_batch(self, *, user_id: str, user_messages: list[str], abort_requested: bool) -> ChatResult:
+        raw_user_message = "\n".join(msg.strip() for msg in user_messages if msg.strip())
+        preprocessed = self.window_preprocessor.preprocess(user_messages)
+        user_message = preprocessed.merged_user_message or raw_user_message
+        self.metrics.inc("long_text_placeholder_count", preprocessed.long_placeholder_count)
+        if preprocessed.used_window_summary:
+            self.metrics.inc("window_compress_count")
+        if abort_requested:
+            self.metrics.inc("abort_batch_count")
+
         logger.info("Chat handling started | user_id=%s", user_id)
         logger.debug("Incoming user message | user_id=%s | text=%s", user_id, user_message)
         now = now_local()
@@ -491,7 +509,7 @@ class ChatOrchestrator:
         self.task_queue.submit(
             self._update_user_relation_state,
             user_id=user_id,
-            user_message=user_message,
+            user_message=raw_user_message or user_message,
             reply=reply,
         )
         logger.debug("Assistant message persisted | user_id=%s | session_id=%s", user_id, session.session_id)

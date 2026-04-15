@@ -163,6 +163,38 @@ class LLMClient:
             preference_denied=int(data.get("preference_denied", 0) or 0),
         )
 
+    def extract_keywords(self, *, text: str, top_k: int = 5) -> list[str]:
+        data = self._call_json_decider(
+            system_asset="prompt/ai_keyword_extract_system.md",
+            user_asset="prompt/ai_keyword_extract_user.md",
+            values={"text": text, "top_k": top_k},
+        )
+        raw = data.get("keywords", [])
+        keywords = [str(item).strip() for item in (raw if isinstance(raw, list) else []) if str(item).strip()]
+        return keywords[:max(1, min(10, top_k))]
+
+    def summarize_long_message(self, *, text: str) -> str:
+        data = self._call_json_decider(
+            system_asset="prompt/ai_long_summary_system.md",
+            user_asset="prompt/ai_long_summary_user.md",
+            values={"text": text},
+        )
+        brief = str(data.get("summary", "")).strip()
+        if brief:
+            return brief
+        return (text[:80] + "...") if len(text) > 80 else text
+
+    def summarize_window_messages(self, *, messages: list[str]) -> str:
+        data = self._call_json_decider(
+            system_asset="prompt/ai_window_summary_system.md",
+            user_asset="prompt/ai_window_summary_user.md",
+            values={"messages": "\n".join(f"- {item}" for item in messages)},
+        )
+        summary = str(data.get("summary", "")).strip()
+        if summary:
+            return summary
+        return "\n".join(f"- {item}" for item in messages[:8])
+
     def generate_reply(
         self,
         *,

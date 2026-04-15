@@ -1,4 +1,5 @@
 from app.core.config import settings
+from app.core.metrics import MetricsRegistry
 from app.domain.services.emotion_engine import EmotionEngine
 from app.domain.services.identity_service import IdentityService
 from app.domain.services.memory_writer import MemoryWriter
@@ -19,8 +20,10 @@ from app.repos.sqlite_repo import (
     SQLiteVectorRepo,
 )
 from app.services.chat_orchestrator import ChatOrchestrator
+from app.services.conversation_window_manager import ConversationWindowManager
 from app.services.llm_client import LLMClient
 from app.services.prompt_composer import PromptComposer
+from app.services.window_preprocessor import WindowPreprocessor
 
 
 class Container:
@@ -51,6 +54,8 @@ class Container:
         )
         self.prompt_composer = PromptComposer()
         self.llm_client = LLMClient()
+        self.metrics = MetricsRegistry()
+        self.window_preprocessor = WindowPreprocessor(llm_client=self.llm_client)
         self.task_queue = TaskQueue(
             enabled=settings.jobs.enabled,
             worker_count=settings.jobs.worker_count,
@@ -86,6 +91,16 @@ class Container:
             prompt_composer=self.prompt_composer,
             llm_client=self.llm_client,
             task_queue=self.task_queue,
+            window_preprocessor=self.window_preprocessor,
+            metrics=self.metrics,
+        )
+        self.window_manager = ConversationWindowManager(
+            batch_executor=lambda user_id, batch, abort: self.chat_orchestrator.handle_window_batch(
+                user_id=user_id,
+                user_messages=batch,
+                abort_requested=abort,
+            ),
+            metrics=self.metrics,
         )
 
 

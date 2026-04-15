@@ -3,6 +3,7 @@ from app.domain.services.identity_service import IdentityService
 from app.domain.services.memory_writer import MemoryWriter
 from app.domain.services.persona_engine import PersonaEngine
 from app.jobs.task_queue import TaskQueue
+from app.core.metrics import MetricsRegistry
 from app.repos.sqlite_repo import (
     SQLiteEmotionStateRepo,
     SQLiteFactRepo,
@@ -18,6 +19,7 @@ from app.repos.sqlite_repo import (
 from app.services.chat_orchestrator import ChatOrchestrator
 from app.services.llm_client import RetrievalPlan
 from app.services.prompt_composer import PromptComposer
+from app.services.window_preprocessor import WindowPreprocessor
 from types import SimpleNamespace
 
 
@@ -75,6 +77,16 @@ class EchoLLMClient:
             preference_denied=0,
         )
 
+    def extract_keywords(self, **kwargs) -> list[str]:  # noqa: ANN003
+        return ["关键词A", "关键词B"]
+
+    def summarize_long_message(self, **kwargs) -> str:  # noqa: ANN003
+        text = kwargs["text"]
+        return text[:20]
+
+    def summarize_window_messages(self, **kwargs) -> str:  # noqa: ANN003
+        return "窗口摘要"
+
 
 class ProfileEchoLLMClient:
     def plan_retrieval(self, **kwargs) -> RetrievalPlan:  # noqa: ANN003
@@ -119,6 +131,16 @@ class ProfileEchoLLMClient:
             preference_denied=0,
         )
 
+    def extract_keywords(self, **kwargs) -> list[str]:  # noqa: ANN003
+        return ["关键词A", "关键词B"]
+
+    def summarize_long_message(self, **kwargs) -> str:  # noqa: ANN003
+        text = kwargs["text"]
+        return text[:20]
+
+    def summarize_window_messages(self, **kwargs) -> str:  # noqa: ANN003
+        return "窗口摘要"
+
 
 def _build_orchestrator(db_path: str) -> tuple[ChatOrchestrator, SQLiteProfileRepo, SQLiteRelationRepo]:
     store = SQLiteStore(db_path)
@@ -146,6 +168,8 @@ def _build_orchestrator(db_path: str) -> tuple[ChatOrchestrator, SQLiteProfileRe
         prompt_composer=PromptComposer(),
         llm_client=EchoLLMClient(),  # type: ignore[arg-type]
         task_queue=TaskQueue(enabled=False, worker_count=1, queue_size=100),
+        window_preprocessor=WindowPreprocessor(llm_client=EchoLLMClient()),  # type: ignore[arg-type]
+        metrics=MetricsRegistry(),
     )
     return orchestrator, profile_repo, relation_repo
 
@@ -209,6 +233,8 @@ def test_profile_context_differs_by_user_expression_style(tmp_path) -> None:
         prompt_composer=PromptComposer(),
         llm_client=ProfileEchoLLMClient(),  # type: ignore[arg-type]
         task_queue=TaskQueue(enabled=False, worker_count=1, queue_size=100),
+        window_preprocessor=WindowPreprocessor(llm_client=ProfileEchoLLMClient()),  # type: ignore[arg-type]
+        metrics=MetricsRegistry(),
     )
     short_reply = orchestrator.handle_message(user_id="u_short", user_message="好困").reply
     long_reply = orchestrator.handle_message(
@@ -253,6 +279,8 @@ def test_group_emotion_context_injected_into_profile_context(tmp_path) -> None:
         prompt_composer=PromptComposer(),
         llm_client=ProfileEchoLLMClient(),  # type: ignore[arg-type]
         task_queue=TaskQueue(enabled=False, worker_count=1, queue_size=100),
+        window_preprocessor=WindowPreprocessor(llm_client=ProfileEchoLLMClient()),  # type: ignore[arg-type]
+        metrics=MetricsRegistry(),
     )
     reply = orchestrator.handle_message(user_id="u_viewer", user_message="我最近在复习").reply
     assert "群体情绪：整体偏积极" in reply
@@ -284,6 +312,8 @@ def test_long_term_memory_affects_address_and_tone_context(tmp_path) -> None:
         prompt_composer=PromptComposer(),
         llm_client=ProfileEchoLLMClient(),  # type: ignore[arg-type]
         task_queue=TaskQueue(enabled=False, worker_count=1, queue_size=100),
+        window_preprocessor=WindowPreprocessor(llm_client=ProfileEchoLLMClient()),  # type: ignore[arg-type]
+        metrics=MetricsRegistry(),
     )
     orchestrator.handle_message(user_id="u_mem", user_message="叫我小北，正式一点")
     reply = orchestrator.handle_message(user_id="u_mem", user_message="今天聊聊状态").reply

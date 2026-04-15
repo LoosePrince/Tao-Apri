@@ -60,16 +60,18 @@ async def lifespan(_: FastAPI):
     _log_startup_diagnostics()
     container.task_queue.start()
     container.periodic_scheduler.start()
+    container.window_manager.start()
     if settings.llm.startup_healthcheck_enabled:
         ok = container.llm_client.startup_health_check()
         if not ok:
             logger.error("LLM startup health check failed, service continues in degraded mode.")
-    onebot_client = OneBotWSClient(container.chat_orchestrator)
+    onebot_client = OneBotWSClient(container.window_manager)
     await onebot_client.start()
     try:
         yield
     finally:
         await onebot_client.stop()
+        container.window_manager.stop()
         container.periodic_scheduler.stop()
         container.task_queue.stop()
 

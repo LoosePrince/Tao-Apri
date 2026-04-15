@@ -1,4 +1,5 @@
 from app.core.config import settings
+from app.core.metrics import MetricsRegistry
 from app.domain.models import UserPreference, UserRelation
 from app.domain.services.emotion_engine import EmotionEngine
 from app.domain.services.identity_service import IdentityService
@@ -20,6 +21,7 @@ from app.repos.sqlite_repo import (
 from app.services.chat_orchestrator import ChatOrchestrator
 from app.services.llm_client import RetrievalPlan
 from app.services.prompt_composer import PromptComposer
+from app.services.window_preprocessor import WindowPreprocessor
 from types import SimpleNamespace
 
 
@@ -78,6 +80,16 @@ class EchoMemoryLLMClient:
             preference_denied=preference_denied,
         )
 
+    def extract_keywords(self, **kwargs) -> list[str]:  # noqa: ANN003
+        return ["工作", "项目"]
+
+    def summarize_long_message(self, **kwargs) -> str:  # noqa: ANN003
+        text = kwargs["text"]
+        return text[:20]
+
+    def summarize_window_messages(self, **kwargs) -> str:  # noqa: ANN003
+        return "窗口摘要"
+
 
 def _build_orchestrator(db_path: str) -> tuple[ChatOrchestrator, MemoryWriter, SQLiteRelationRepo, SQLitePreferenceRepo]:
     store = SQLiteStore(db_path)
@@ -105,6 +117,8 @@ def _build_orchestrator(db_path: str) -> tuple[ChatOrchestrator, MemoryWriter, S
         prompt_composer=PromptComposer(),
         llm_client=EchoMemoryLLMClient(),  # type: ignore[arg-type]
         task_queue=TaskQueue(enabled=False, worker_count=1, queue_size=100),
+        window_preprocessor=WindowPreprocessor(llm_client=EchoMemoryLLMClient()),  # type: ignore[arg-type]
+        metrics=MetricsRegistry(),
     )
     return orchestrator, memory_writer, relation_repo, preference_repo
 
