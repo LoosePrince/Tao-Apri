@@ -40,6 +40,7 @@ def test_cross_conversation_memories_are_topic_level_only() -> None:
     ctx = composer.compose(
         now=datetime.now(timezone.utc),
         viewer_user_id="u_self",
+        viewer_profile_summary="偏好简洁交流",
         persona=persona,
         session_emotion=0.1,
         global_emotion=0.2,

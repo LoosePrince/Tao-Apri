@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 
-from app.domain.models import MemoryFact, Message, Session, User
+from app.domain.models import MemoryFact, Message, Session, User, UserPreference, UserProfile, UserRelation
 
 
 class UserRepo(ABC):
@@ -59,3 +59,27 @@ class EmotionStateRepo(ABC):
 
     @abstractmethod
     def set_global_emotion(self, value: float) -> None: ...
+
+
+class RelationRepo(ABC):
+    @abstractmethod
+    def get(self, source_user_id: str, target_user_id: str) -> UserRelation | None: ...
+
+    @abstractmethod
+    def upsert(self, relation: UserRelation) -> UserRelation: ...
+
+
+class PreferenceRepo(ABC):
+    @abstractmethod
+    def get(self, user_id: str) -> UserPreference | None: ...
+
+    @abstractmethod
+    def upsert(self, preference: UserPreference) -> UserPreference: ...
+
+
+class ProfileRepo(ABC):
+    @abstractmethod
+    def get(self, user_id: str) -> UserProfile | None: ...
+
+    @abstractmethod
+    def upsert(self, profile: UserProfile) -> UserProfile: ...

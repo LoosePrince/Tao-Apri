@@ -3,8 +3,26 @@ import math
 import sqlite3
 from datetime import datetime, timezone
 
-from app.domain.models import MemoryFact, Message, Session, User
-from app.repos.interfaces import EmotionStateRepo, FactRepo, MessageRepo, SessionRepo, UserRepo, VectorRepo
+from app.domain.models import (
+    MemoryFact,
+    Message,
+    Session,
+    User,
+    UserPreference,
+    UserProfile,
+    UserRelation,
+)
+from app.repos.interfaces import (
+    EmotionStateRepo,
+    FactRepo,
+    MessageRepo,
+    PreferenceRepo,
+    ProfileRepo,
+    RelationRepo,
+    SessionRepo,
+    UserRepo,
+    VectorRepo,
+)
 
 
 def _now_iso() -> str:
@@ -89,6 +107,28 @@ class SQLiteStore:
             CREATE TABLE IF NOT EXISTS emotion_state (
                 key TEXT PRIMARY KEY,
                 value REAL NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS user_relations (
+                source_user_id TEXT NOT NULL,
+                target_user_id TEXT NOT NULL,
+                polarity TEXT NOT NULL,
+                strength REAL NOT NULL,
+                trust_score REAL NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (source_user_id, target_user_id)
+            );
+            CREATE TABLE IF NOT EXISTS user_preferences (
+                user_id TEXT PRIMARY KEY,
+                share_default TEXT NOT NULL,
+                topic_visibility TEXT NOT NULL,
+                explicit_deny_items TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS user_profiles (
+                user_id TEXT PRIMARY KEY,
+                profile_summary TEXT NOT NULL,
+                preference_summary TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
             """
@@ -400,3 +440,149 @@ class SQLiteEmotionStateRepo(EmotionStateRepo):
             (value, _now_iso()),
         )
         self.store.conn.commit()
+
+
+class SQLiteRelationRepo(RelationRepo):
+    def __init__(self, store: SQLiteStore) -> None:
+        self.store = store
+
+    def get(self, source_user_id: str, target_user_id: str) -> UserRelation | None:
+        row = self.store.conn.execute(
+            """
+            SELECT source_user_id, target_user_id, polarity, strength, trust_score, updated_at
+            FROM user_relations
+            WHERE source_user_id = ? AND target_user_id = ?
+            """,
+            (source_user_id, target_user_id),
+        ).fetchone()
+        if not row:
+            return None
+        return UserRelation(
+            source_user_id=row["source_user_id"],
+            target_user_id=row["target_user_id"],
+            polarity=row["polarity"],
+            strength=float(row["strength"]),
+            trust_score=float(row["trust_score"]),
+            updated_at=_parse_dt(row["updated_at"]),
+        )
+
+    def upsert(self, relation: UserRelation) -> UserRelation:
+        now = _now_iso()
+        self.store.conn.execute(
+            """
+            INSERT INTO user_relations (
+                source_user_id, target_user_id, polarity, strength, trust_score, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(source_user_id, target_user_id) DO UPDATE SET
+                polarity = excluded.polarity,
+                strength = excluded.strength,
+                trust_score = excluded.trust_score,
+                updated_at = excluded.updated_at
+            """,
+            (
+                relation.source_user_id,
+                relation.target_user_id,
+                relation.polarity,
+                relation.strength,
+                relation.trust_score,
+                now,
+            ),
+        )
+        self.store.conn.commit()
+        return self.get(relation.source_user_id, relation.target_user_id) or relation
+
+
+class SQLitePreferenceRepo(PreferenceRepo):
+    def __init__(self, store: SQLiteStore) -> None:
+        self.store = store
+
+    def get(self, user_id: str) -> UserPreference | None:
+        row = self.store.conn.execute(
+            """
+            SELECT user_id, share_default, topic_visibility, explicit_deny_items, updated_at
+            FROM user_preferences
+            WHERE user_id = ?
+            """,
+            (user_id,),
+        ).fetchone()
+        if not row:
+            return None
+        return UserPreference(
+            user_id=row["user_id"],
+            share_default=row["share_default"],
+            topic_visibility=json.loads(row["topic_visibility"] or "{}"),
+            explicit_deny_items=json.loads(row["explicit_deny_items"] or "[]"),
+            updated_at=_parse_dt(row["updated_at"]),
+        )
+
+    def upsert(self, preference: UserPreference) -> UserPreference:
+        now = _now_iso()
+        self.store.conn.execute(
+            """
+            INSERT INTO user_preferences (
+                user_id, share_default, topic_visibility, explicit_deny_items, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                share_default = excluded.share_default,
+                topic_visibility = excluded.topic_visibility,
+                explicit_deny_items = excluded.explicit_deny_items,
+                updated_at = excluded.updated_at
+            """,
+            (
+                preference.user_id,
+                preference.share_default,
+                json.dumps(preference.topic_visibility, ensure_ascii=False),
+                json.dumps(preference.explicit_deny_items, ensure_ascii=False),
+                now,
+            ),
+        )
+        self.store.conn.commit()
+        return self.get(preference.user_id) or preference
+
+
+class SQLiteProfileRepo(ProfileRepo):
+    def __init__(self, store: SQLiteStore) -> None:
+        self.store = store
+
+    def get(self, user_id: str) -> UserProfile | None:
+        row = self.store.conn.execute(
+            """
+            SELECT user_id, profile_summary, preference_summary, updated_at
+            FROM user_profiles
+            WHERE user_id = ?
+            """,
+            (user_id,),
+        ).fetchone()
+        if not row:
+            return None
+        return UserProfile(
+            user_id=row["user_id"],
+            profile_summary=row["profile_summary"],
+            preference_summary=row["preference_summary"],
+            updated_at=_parse_dt(row["updated_at"]),
+        )
+
+    def upsert(self, profile: UserProfile) -> UserProfile:
+        now = _now_iso()
+        self.store.conn.execute(
+            """
+            INSERT INTO user_profiles (
+                user_id, profile_summary, preference_summary, updated_at
+            )
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                profile_summary = excluded.profile_summary,
+                preference_summary = excluded.preference_summary,
+                updated_at = excluded.updated_at
+            """,
+            (
+                profile.user_id,
+                profile.profile_summary,
+                profile.preference_summary,
+                now,
+            ),
+        )
+        self.store.conn.commit()
+        return self.get(profile.user_id) or profile

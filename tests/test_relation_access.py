@@ -1,0 +1,107 @@
+from app.core.config import settings
+from app.domain.models import UserPreference, UserRelation
+from app.domain.services.emotion_engine import EmotionEngine
+from app.domain.services.identity_service import IdentityService
+from app.domain.services.memory_writer import MemoryWriter
+from app.domain.services.persona_engine import PersonaEngine
+from app.repos.sqlite_repo import (
+    SQLiteEmotionStateRepo,
+    SQLiteFactRepo,
+    SQLiteMessageRepo,
+    SQLitePreferenceRepo,
+    SQLiteProfileRepo,
+    SQLiteRelationRepo,
+    SQLiteSessionRepo,
+    SQLiteStore,
+    SQLiteUserRepo,
+    SQLiteVectorRepo,
+)
+from app.services.chat_orchestrator import ChatOrchestrator
+from app.services.prompt_composer import PromptComposer
+
+
+class EchoMemoryLLMClient:
+    def generate_reply(self, **kwargs) -> str:  # noqa: ANN003
+        prompt_context = kwargs["prompt_context"]
+        return prompt_context.memory_context
+
+
+def _build_orchestrator(db_path: str) -> tuple[ChatOrchestrator, MemoryWriter, SQLiteRelationRepo, SQLitePreferenceRepo]:
+    store = SQLiteStore(db_path)
+    user_repo = SQLiteUserRepo(store)
+    session_repo = SQLiteSessionRepo(store)
+    message_repo = SQLiteMessageRepo(store)
+    fact_repo = SQLiteFactRepo(store)
+    vector_repo = SQLiteVectorRepo(store)
+    emotion_state_repo = SQLiteEmotionStateRepo(store)
+    relation_repo = SQLiteRelationRepo(store)
+    preference_repo = SQLitePreferenceRepo(store)
+    profile_repo = SQLiteProfileRepo(store)
+    identity_service = IdentityService(user_repo, session_repo)
+    memory_writer = MemoryWriter(message_repo=message_repo, vector_repo=vector_repo, fact_repo=fact_repo)
+    orchestrator = ChatOrchestrator(
+        identity_service=identity_service,
+        persona_engine=PersonaEngine(),
+        emotion_engine=EmotionEngine(state_repo=emotion_state_repo),
+        message_repo=message_repo,
+        vector_repo=vector_repo,
+        relation_repo=relation_repo,
+        preference_repo=preference_repo,
+        profile_repo=profile_repo,
+        memory_writer=memory_writer,
+        prompt_composer=PromptComposer(),
+        llm_client=EchoMemoryLLMClient(),  # type: ignore[arg-type]
+    )
+    return orchestrator, memory_writer, relation_repo, preference_repo
+
+
+def test_unrelated_user_gets_i_dont_know_cross_memory(tmp_path) -> None:
+    old_min_score = settings.retrieval.min_score
+    settings.retrieval.min_score = 0.0
+    try:
+        orchestrator, memory_writer, _, preference_repo = _build_orchestrator(str(tmp_path / "r1.db"))
+        preference_repo.upsert(
+            UserPreference(user_id="u_b", share_default="allow", topic_visibility={})
+        )
+        memory_writer.write(
+            session_id="s_b",
+            user_id="u_b",
+            role="user",
+            content="project workload pressure and overtime",
+            emotion_score=0.0,
+        )
+        result = orchestrator.handle_message(user_id="u_a", user_message="project workload status")
+        assert "我不知道" in result.reply
+    finally:
+        settings.retrieval.min_score = old_min_score
+
+
+def test_positive_relation_can_access_topic_summary(tmp_path) -> None:
+    old_min_score = settings.retrieval.min_score
+    settings.retrieval.min_score = 0.0
+    try:
+        orchestrator, memory_writer, relation_repo, preference_repo = _build_orchestrator(str(tmp_path / "r2.db"))
+        relation_repo.upsert(
+            UserRelation(
+                source_user_id="u_a",
+                target_user_id="u_b",
+                polarity="positive",
+                strength=0.9,
+                trust_score=0.8,
+            )
+        )
+        preference_repo.upsert(
+            UserPreference(user_id="u_b", share_default="allow", topic_visibility={})
+        )
+        memory_writer.write(
+            session_id="s_b",
+            user_id="u_b",
+            role="user",
+            content="project workload pressure and overtime",
+            emotion_score=0.0,
+        )
+        result = orchestrator.handle_message(user_id="u_a", user_message="project workload status")
+        assert "跨对话模糊参考" in result.reply
+        assert "日常近况" in result.reply or "工作与职业" in result.reply
+    finally:
+        settings.retrieval.min_score = old_min_score

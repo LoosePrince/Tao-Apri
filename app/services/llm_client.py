@@ -80,6 +80,7 @@ class LLMClient:
             [
                 prompt_context.system_core,
                 prompt_context.system_runtime,
+                "当前用户画像：\n" + prompt_context.profile_context,
                 "记忆上下文：\n" + prompt_context.memory_context,
                 "策略说明：\n" + prompt_context.policy_notice,
             ]

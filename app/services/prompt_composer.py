@@ -13,6 +13,7 @@ class PromptContext:
     system_runtime: str
     memory_context: str
     policy_notice: str
+    profile_context: str
     user_message: str
 
 
@@ -81,6 +82,7 @@ class PromptComposer:
         *,
         now: datetime,
         viewer_user_id: str,
+        viewer_profile_summary: str,
         persona: PersonaSnapshot,
         session_emotion: float,
         global_emotion: float,
@@ -129,5 +131,6 @@ class PromptComposer:
             system_runtime=system_runtime,
             memory_context=memory_context,
             policy_notice=policy_notice,
+            profile_context=viewer_profile_summary.strip() or "暂无稳定画像，保持谨慎表达。",
             user_message=user_message,
         )

@@ -26,6 +26,10 @@ class RetrievalConfig(BaseModel):
     top_k: int = Field(default=5, ge=1, le=50)
     min_score: float = Field(default=0.2, ge=0.0, le=1.0)
     recency_window_days: int = Field(default=30, ge=1, le=365)
+    cross_positive_threshold: float = Field(default=0.2, ge=0.0, le=1.0)
+    cross_neutral_threshold: float = Field(default=0.35, ge=0.0, le=1.0)
+    cross_negative_threshold: float = Field(default=0.6, ge=0.0, le=1.0)
+    relation_access_min_strength: float = Field(default=0.2, ge=0.0, le=1.0)
 
 
 class PersonaConfig(BaseModel):

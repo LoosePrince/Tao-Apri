@@ -47,3 +47,30 @@ class MemoryFact:
     fact_type: str
     confidence: float
     created_at: datetime
+
+
+@dataclass(slots=True)
+class UserRelation:
+    source_user_id: str
+    target_user_id: str
+    polarity: str = "neutral"  # positive | neutral | negative
+    strength: float = 0.0
+    trust_score: float = 0.0
+    updated_at: datetime | None = None
+
+
+@dataclass(slots=True)
+class UserPreference:
+    user_id: str
+    share_default: str = "deny"  # allow | deny
+    topic_visibility: dict[str, str] = field(default_factory=dict)  # topic -> allow | deny
+    explicit_deny_items: list[str] = field(default_factory=list)
+    updated_at: datetime | None = None
+
+
+@dataclass(slots=True)
+class UserProfile:
+    user_id: str
+    profile_summary: str = ""
+    preference_summary: str = ""
+    updated_at: datetime | None = None

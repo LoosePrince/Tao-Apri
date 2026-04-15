@@ -7,6 +7,9 @@ from app.repos.sqlite_repo import (
     SQLiteEmotionStateRepo,
     SQLiteFactRepo,
     SQLiteMessageRepo,
+    SQLitePreferenceRepo,
+    SQLiteProfileRepo,
+    SQLiteRelationRepo,
     SQLiteSessionRepo,
     SQLiteStore,
     SQLiteUserRepo,
@@ -26,6 +29,9 @@ class Container:
         self.fact_repo = SQLiteFactRepo(self.store)
         self.vector_repo = SQLiteVectorRepo(self.store)
         self.emotion_state_repo = SQLiteEmotionStateRepo(self.store)
+        self.relation_repo = SQLiteRelationRepo(self.store)
+        self.preference_repo = SQLitePreferenceRepo(self.store)
+        self.profile_repo = SQLiteProfileRepo(self.store)
 
         self.identity_service = IdentityService(self.user_repo, self.session_repo)
         self.persona_engine = PersonaEngine()
@@ -48,6 +54,9 @@ class Container:
             emotion_engine=self.emotion_engine,
             message_repo=self.message_repo,
             vector_repo=self.vector_repo,
+            relation_repo=self.relation_repo,
+            preference_repo=self.preference_repo,
+            profile_repo=self.profile_repo,
             memory_writer=self.memory_writer,
             prompt_composer=self.prompt_composer,
             llm_client=self.llm_client,
