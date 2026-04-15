@@ -2,25 +2,29 @@
 
 ## 模块边界
 
-- `api`: 对外接口 (`/chat`, `/session`, `/health`)
+- `api`: 对外接口（`/chat`、`/session`、`/health`、`/metrics`、`/llm/models`）
 - `domain.services.identity_service`: 用户身份与会话生命周期
 - `domain.services.persona_engine`: 稳定人设与时间语境
 - `domain.services.emotion_engine`: 会话情绪与全局偏移
 - `domain.services.memory_writer`: 消息模糊化、事实抽取、向量写入
-- `services.chat_orchestrator`: 主编排流程
+- `services.chat_orchestrator`: 主编排流程（检索规划、跨对话访问控制、画像更新）
+- `services.conversation_window_manager` + `services.window_preprocessor`: 多条输入合并与窗口压缩
 - `services.prompt_composer`: 提示词上下文拼装
-- `repos`: 数据访问抽象及 SQLite + 向量检索实现
+- `jobs.task_queue` + `jobs.periodic_scheduler`: 异步任务与定时维护
+- `repos`: 数据访问抽象及 SQLite + 向量检索实现（含关系、偏好、画像、情绪状态）
 
 ## 对话主流程
 
-1. 用户请求进入 `/chat`
+1. 用户请求进入 `/chat`（由窗口管理器合并输入批次）
 2. 识别/创建用户与会话
 3. 基于当前消息更新情绪状态
 4. 写入用户消息（raw + sanitized）
-5. 检索记忆（当前用户 + 关联用户的模糊化记忆）
-6. 组装提示词上下文
-7. 生成回复并写入记忆
-8. 返回回复与情绪状态
+5. 多轮检索规划与记忆召回（当前用户 + 跨用户候选）
+6. 基于关系/偏好策略筛选跨对话可见记忆
+7. 生成/更新用户画像摘要并注入上下文
+8. 组装提示词上下文并调用 LLM 生成回复
+9. 写入 assistant 消息，异步更新关系状态
+10. 返回回复与情绪状态
 
 ## 非隔离记忆原则
 
@@ -43,7 +47,7 @@
   - 允许：群体趋势、共性问题、情绪倾向等主题级信息
   - 禁止：用户标识、联系方式、精确时间地点、原句复述、可反查事件片段
 
-## 关系与偏好驱动检索（规划）
+## 关系与偏好驱动检索（已实现）
 
 - 关系模型（user_a -> user_b）：
   - `relation_polarity`: `positive | neutral | negative`
@@ -66,8 +70,15 @@
 - 全局情绪偏移持久化在 `emotion_state` 表
 - 服务重启后自动恢复全局情绪基线
 
+## 定时任务与维护
+
+- `jobs.maintenance_enabled=true` 时启用定时调度
+- 当前内置任务：
+  - 情绪聚合任务（按时间窗口汇总最近消息）
+  - 向量维护任务（向量索引/热度维护）
+
 ## 可演进方向
 
 - 在高并发场景迁移到 PostgreSQL + Qdrant/pgvector
 - 接入真实 LLM Provider 并分离模板层
-- 增加情绪聚合定时任务与监控指标
+- 完善运行指标观测与告警
