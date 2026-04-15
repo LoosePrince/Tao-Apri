@@ -18,14 +18,6 @@ class PromptContext:
 
 
 class PromptComposer:
-    _TOPIC_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
-        ("学习与考试", ("学习", "考试", "作业", "上课", "复习", "成绩")),
-        ("工作与职业", ("工作", "加班", "同事", "项目", "面试", "公司")),
-        ("作息与健康", ("睡", "失眠", "作息", "疲惫", "生病", "运动", "饮食")),
-        ("情绪与关系", ("开心", "难过", "焦虑", "压力", "朋友", "家人", "恋爱")),
-        ("娱乐与兴趣", ("游戏", "动漫", "电影", "音乐", "读书", "旅行")),
-    )
-
     @staticmethod
     def _render_template(template: str, values: dict[str, object]) -> str:
         if not template:
@@ -46,13 +38,6 @@ class PromptComposer:
         )
         return redacted
 
-    def _infer_topic(self, text: str) -> str:
-        lowered = text.lower()
-        for label, keywords in self._TOPIC_RULES:
-            if any(keyword in text or keyword in lowered for keyword in keywords):
-                return label
-        return "日常近况"
-
     def _build_memory_context(self, viewer_user_id: str, memories: list[Message]) -> str:
         self_header = read_required_markdown_asset("prompt/memory_self_header.md")
         self_item_template = read_required_markdown_asset("prompt/memory_self_item.md")
@@ -69,14 +54,15 @@ class PromptComposer:
                         self_item_template.format(role=memory.role, text=safe_text[:120])
                     )
                 continue
-            cross_topics.append(self._infer_topic(safe_text))
+            if safe_text:
+                cross_topics.append("跨对话上下文片段")
 
         memory_lines: list[str] = []
         if self_lines:
             memory_lines.append(self_header)
             memory_lines.extend(self_lines[:6])
         if cross_topics:
-            topic_summary = "、".join(sorted(set(cross_topics))[:4])
+            topic_summary = "、".join(sorted(set(cross_topics))[:2])
             memory_lines.append(cross_header)
             memory_lines.append(cross_summary_template.format(topic_summary=topic_summary))
 

@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 import logging
-from collections import Counter
-import re
+import json
 
 from app.core.clock import now_local
 from app.core.config import settings
@@ -120,58 +119,28 @@ class ChatOrchestrator:
         user_texts = [msg.sanitized_content.strip() for msg in recent_messages if msg.role == "user" and msg.sanitized_content.strip()]
         if not user_texts:
             return "", "", "", "", "", 0.0, 0.0
-
-        topic_counter = Counter(self._infer_topic(text) for text in user_texts)
-        top_topics = [topic for topic, _ in topic_counter.most_common(3)]
-        topic_text = "、".join(top_topics) if top_topics else "日常近况"
-        avg_len = sum(len(text) for text in user_texts) / max(1, len(user_texts))
-        style_text = "表达更简短直接" if avg_len < 20 else "表达相对完整，愿意展开描述"
-        preference_cues: list[str] = []
-        for text in user_texts:
-            if any(keyword in text for keyword in ("喜欢", "爱", "想要")):
-                preference_cues.append("偏好表达积极倾向")
-            if any(keyword in text for keyword in ("不想", "讨厌", "别", "不要")):
-                preference_cues.append("会明确表达边界与不偏好")
-        preference_summary = "；".join(dict.fromkeys(preference_cues)) or "偏好信息有限，建议继续观察。"
-        preferred_address = ""
-        for text in user_texts:
-            if "叫我" in text:
-                after = text.split("叫我", 1)[1]
-                parts = re.split(r"[，。！？!?,；;、\s]+", after, maxsplit=1)
-                preferred_address = (parts[0] if parts else "").strip()[:12]
-        tone_preference = "自然中性"
-        if any(token in text for text in user_texts for token in ("严肃一点", "正式一点", "别太口语")):
-            tone_preference = "偏正式克制"
-        elif any(token in text for text in user_texts for token in ("随意点", "轻松点", "幽默一点", "别太严肃")):
-            tone_preference = "偏轻松口语"
-
-        schedule_state = "常规节奏"
-        primary_topic = top_topics[0] if top_topics else "日常近况"
-        if primary_topic == "学习与考试":
-            schedule_state = "学习周期"
-        elif primary_topic == "工作与职业":
-            schedule_state = "工作周期"
-        elif primary_topic in ("作息与健康", "情绪与关系"):
-            schedule_state = "休整周期"
-        if 23 <= current_hour or current_hour <= 5:
-            schedule_state += "（夜间阶段）"
-
-        fatigue_hits = sum(
-            1
-            for text in user_texts
-            if any(token in text for token in ("累", "困", "失眠", "疲惫", "没精神", "头疼"))
+        decision = self.llm_client.generate_profile_decision(
+            user_texts=user_texts,
+            current_hour=current_hour,
+            session_emotion=session_emotion,
+            global_emotion=global_emotion,
         )
-        fatigue_level = fatigue_hits / max(1, len(user_texts))
-        if 23 <= current_hour or current_hour <= 5:
-            fatigue_level += 0.15
-        if session_emotion < -0.2:
-            fatigue_level += 0.1
-        fatigue_level = self._clamp01(fatigue_level)
+        profile_summary = str(decision.get("profile_summary", "")).strip()
+        preference_summary = str(decision.get("preference_summary", "")).strip()
+        preferred_address = str(decision.get("preferred_address", "")).strip()[:12]
+        tone_preference = str(decision.get("tone_preference", "")).strip()
+        schedule_state = str(decision.get("schedule_state", "")).strip()
+        fatigue_level = self._clamp01(float(decision.get("fatigue_level", 0.0) or 0.0))
+        emotion_peak_level = self._clamp01(float(decision.get("emotion_peak_level", 0.0) or 0.0))
 
-        peak_from_messages = max((abs(msg.emotion_score) for msg in recent_messages if msg.role == "user"), default=0.0)
-        emotion_peak_level = self._clamp01(max(peak_from_messages, abs(session_emotion), abs(global_emotion)))
-
-        profile_summary = f"近期关注话题：{topic_text}；{style_text}。"
+        if not profile_summary:
+            profile_summary = "近期表达仍在观察中。"
+        if not preference_summary:
+            preference_summary = "偏好信息有限，建议继续观察。"
+        if not tone_preference:
+            tone_preference = "自然中性"
+        if not schedule_state:
+            schedule_state = "常规节奏"
         return (
             profile_summary,
             preference_summary,
@@ -191,33 +160,31 @@ class ChatOrchestrator:
             source_user_id=user_id,
             target_user_id=ASSISTANT_RELATION_ID,
         )
-        lowered = user_message.lower()
-        intimacy_delta = 0.03 + min(len(user_message), 120) / 3000.0
-        trust_delta = 0.02
-        dependency_delta = 0.0
-
-        if any(token in user_message for token in ("我觉得", "我最近", "我有点", "我很")):
-            intimacy_delta += 0.03
-        if any(token in user_message for token in ("你觉得", "你能", "帮我", "怎么办", "建议")):
-            trust_delta += 0.05
-        if any(token in user_message for token in ("你告诉我", "只能靠你", "离不开你", "全靠你")):
-            dependency_delta += 0.08
-        if any(token in lowered for token in ("滚", "烦", "讨厌", "闭嘴")):
-            intimacy_delta -= 0.06
-            trust_delta -= 0.08
-        if any(token in reply for token in ("可以", "建议", "陪你", "一起")):
-            trust_delta += 0.02
-
-        relation.intimacy_score = self._clamp01(relation.intimacy_score * 0.98 + intimacy_delta)
-        relation.trust_score = self._clamp01(relation.trust_score * 0.98 + trust_delta)
-        relation.dependency_score = self._clamp01(relation.dependency_score * 0.98 + dependency_delta)
-        relation.strength = round((relation.intimacy_score + relation.trust_score) / 2.0, 4)
-        if relation.strength >= 0.65:
-            relation.polarity = "positive"
-        elif relation.strength <= 0.30:
-            relation.polarity = "negative"
-        else:
-            relation.polarity = "neutral"
+        relation_json = json.dumps(
+            {
+                "polarity": relation.polarity,
+                "strength": relation.strength,
+                "trust_score": relation.trust_score,
+                "intimacy_score": relation.intimacy_score,
+                "dependency_score": relation.dependency_score,
+            },
+            ensure_ascii=False,
+        )
+        decision = self.llm_client.evolve_relation_decision(
+            relation_json=relation_json,
+            user_message=user_message,
+            reply=reply,
+        )
+        polarity = str(decision.get("polarity", relation.polarity)).strip()
+        relation.polarity = polarity if polarity in {"positive", "neutral", "negative"} else relation.polarity
+        relation.strength = self._clamp01(float(decision.get("strength", relation.strength) or relation.strength))
+        relation.trust_score = self._clamp01(float(decision.get("trust_score", relation.trust_score) or relation.trust_score))
+        relation.intimacy_score = self._clamp01(
+            float(decision.get("intimacy_score", relation.intimacy_score) or relation.intimacy_score)
+        )
+        relation.dependency_score = self._clamp01(
+            float(decision.get("dependency_score", relation.dependency_score) or relation.dependency_score)
+        )
         self.relation_repo.upsert(relation)
         logger.info(
             "Relation evolved | user_id=%s | target=%s | polarity=%s | strength=%.3f | trust=%.3f | intimacy=%.3f | dependency=%.3f",
@@ -243,66 +210,8 @@ class ChatOrchestrator:
         if not cross_user_msgs:
             return 0.0, "群体情绪：中性平稳。"
         recent_scores = [msg.emotion_score for msg in cross_user_msgs[-20:]]
-        avg = sum(recent_scores) / max(1, len(recent_scores))
-        if avg >= 0.25:
-            tone = "群体情绪：整体偏积极，回复可更主动和鼓励。"
-        elif avg <= -0.25:
-            tone = "群体情绪：整体偏低落，回复应更稳重并增加共情。"
-        else:
-            tone = "群体情绪：中性平稳。"
-        return avg, tone
-
-    @staticmethod
-    def _infer_topic(text: str) -> str:
-        if any(token in text for token in ("学习", "考试", "作业", "复习", "成绩")):
-            return "学习与考试"
-        if any(token in text for token in ("工作", "加班", "同事", "面试", "项目")):
-            return "工作与职业"
-        if any(token in text for token in ("家人", "恋爱", "朋友", "关系", "吵架")):
-            return "情绪与关系"
-        if any(token in text for token in ("失眠", "作息", "健康", "疲惫", "生病")):
-            return "作息与健康"
-        return "日常近况"
-
-    def _relation_allows_cross(self, viewer_user_id: str, source_user_id: str) -> tuple[bool, float]:
-        relation = self.relation_repo.get(viewer_user_id, source_user_id)
-        if relation is None:
-            return False, settings.retrieval.cross_negative_threshold
-        if relation.strength < settings.retrieval.relation_access_min_strength:
-            return False, settings.retrieval.cross_negative_threshold
-        if relation.polarity == "positive":
-            return True, settings.retrieval.cross_positive_threshold
-        if relation.polarity == "negative":
-            return False, settings.retrieval.cross_negative_threshold
-        return True, settings.retrieval.cross_neutral_threshold
-
-    @staticmethod
-    def _memory_similarity(query: str, text: str) -> float:
-        query_norm = query.lower().replace("，", " ").replace(",", " ").strip()
-        text_norm = text.lower().replace("，", " ").replace(",", " ").strip()
-        query_tokens = {token for token in query_norm.split() if token}
-        text_tokens = {token for token in text_norm.split() if token}
-        if len(query_tokens) <= 1:
-            query_tokens = {ch for ch in query_norm if not ch.isspace()}
-        if len(text_tokens) <= 1:
-            text_tokens = {ch for ch in text_norm if not ch.isspace()}
-        if not query_tokens or not text_tokens:
-            return 0.0
-        overlap = len(query_tokens.intersection(text_tokens))
-        return overlap / max(1, len(query_tokens))
-
-    def _preference_allows(self, source_user_id: str, text: str) -> bool:
-        pref = self.preference_repo.get(source_user_id)
-        if pref is None:
-            return False
-        if pref.share_default == "deny":
-            return False
-        topic = self._infer_topic(text)
-        topic_visibility = pref.topic_visibility.get(topic, "allow")
-        if topic_visibility == "deny":
-            return False
-        lowered = text.lower()
-        return not any(item.lower() in lowered for item in pref.explicit_deny_items)
+        decision = self.llm_client.summarize_group_emotion(scores=recent_scores)
+        return decision.score, decision.text
 
     def _apply_cross_access_control(
         self,
@@ -312,35 +221,48 @@ class ChatOrchestrator:
         memories: list[Message],
     ) -> tuple[list[Message], bool, dict[str, int]]:
         visible: list[Message] = []
-        denied_cross_count = 0
-        relation_denied = 0
-        similarity_denied = 0
-        preference_denied = 0
         cross_candidates = 0
+        decision_candidates: list[dict[str, object]] = []
         for memory in memories:
             if memory.user_id == viewer_user_id:
                 visible.append(memory)
                 continue
             cross_candidates += 1
-            relation_allowed, relation_threshold = self._relation_allows_cross(viewer_user_id, memory.user_id)
-            if not relation_allowed:
-                denied_cross_count += 1
-                relation_denied += 1
+            relation = self.relation_repo.get(viewer_user_id, memory.user_id)
+            preference = self.preference_repo.get(memory.user_id)
+            decision_candidates.append(
+                {
+                    "message_id": memory.message_id,
+                    "source_user_id": memory.user_id,
+                    "text": memory.sanitized_content,
+                    "relation": {
+                        "polarity": relation.polarity if relation else "unknown",
+                        "strength": relation.strength if relation else 0.0,
+                    },
+                    "preference": {
+                        "share_default": preference.share_default if preference else "deny",
+                        "topic_visibility": preference.topic_visibility if preference else {},
+                        "explicit_deny_items": preference.explicit_deny_items if preference else [],
+                    },
+                }
+            )
+        decision = self.llm_client.decide_cross_access(
+            viewer_user_id=viewer_user_id,
+            query=query,
+            memories=decision_candidates,
+        )
+        allowed_ids = decision.allowed_message_ids
+        for memory in memories:
+            if memory.user_id == viewer_user_id:
                 continue
-            if self._memory_similarity(query, memory.sanitized_content) < relation_threshold:
-                denied_cross_count += 1
-                similarity_denied += 1
-                continue
-            if not self._preference_allows(memory.user_id, memory.sanitized_content):
-                denied_cross_count += 1
-                preference_denied += 1
-                continue
-            visible.append(memory)
+            if memory.message_id in allowed_ids:
+                visible.append(memory)
+        denied_cross_count = max(0, cross_candidates - len([m for m in memories if m.user_id != viewer_user_id and m.message_id in allowed_ids]))
         return visible, denied_cross_count > 0, {
             "cross_candidates": cross_candidates,
-            "relation_denied": relation_denied,
-            "similarity_denied": similarity_denied,
-            "preference_denied": preference_denied,
+            "relation_denied": decision.relation_denied,
+            "similarity_denied": decision.similarity_denied,
+            "preference_denied": decision.preference_denied,
             "cross_allowed": max(0, cross_candidates - denied_cross_count),
         }
 

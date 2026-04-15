@@ -20,6 +20,7 @@ from app.repos.sqlite_repo import (
 from app.services.chat_orchestrator import ChatOrchestrator
 from app.services.llm_client import RetrievalPlan
 from app.services.prompt_composer import PromptComposer
+from types import SimpleNamespace
 
 
 class EchoMemoryLLMClient:
@@ -30,6 +31,52 @@ class EchoMemoryLLMClient:
     def generate_reply(self, **kwargs) -> str:  # noqa: ANN003
         prompt_context = kwargs["prompt_context"]
         return prompt_context.memory_context
+
+    def generate_profile_decision(self, **kwargs) -> dict[str, object]:  # noqa: ANN003
+        return {
+            "profile_summary": "近期关注话题：日常近况。",
+            "preference_summary": "偏好信息有限，建议继续观察。",
+            "preferred_address": "",
+            "tone_preference": "自然中性",
+            "schedule_state": "常规节奏",
+            "fatigue_level": 0.0,
+            "emotion_peak_level": 0.0,
+        }
+
+    def evolve_relation_decision(self, **kwargs) -> dict[str, object]:  # noqa: ANN003
+        return {
+            "polarity": "neutral",
+            "strength": 0.4,
+            "trust_score": 0.4,
+            "intimacy_score": 0.4,
+            "dependency_score": 0.2,
+        }
+
+    def summarize_group_emotion(self, **kwargs):  # noqa: ANN003
+        return SimpleNamespace(score=0.0, text="群体情绪：中性平稳。")
+
+    def decide_cross_access(self, **kwargs):  # noqa: ANN003
+        memories = kwargs["memories"]
+        allowed_ids: set[str] = set()
+        relation_denied = 0
+        preference_denied = 0
+        for item in memories:
+            relation = item.get("relation", {})
+            preference = item.get("preference", {})
+            if float(relation.get("strength", 0.0) or 0.0) < 0.2:
+                relation_denied += 1
+                continue
+            if str(preference.get("share_default", "deny")) == "deny":
+                preference_denied += 1
+                continue
+            allowed_ids.add(str(item["message_id"]))
+
+        return SimpleNamespace(
+            allowed_message_ids=allowed_ids,
+            relation_denied=relation_denied,
+            similarity_denied=0,
+            preference_denied=preference_denied,
+        )
 
 
 def _build_orchestrator(db_path: str) -> tuple[ChatOrchestrator, MemoryWriter, SQLiteRelationRepo, SQLitePreferenceRepo]:

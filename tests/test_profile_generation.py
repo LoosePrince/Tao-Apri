@@ -18,6 +18,7 @@ from app.repos.sqlite_repo import (
 from app.services.chat_orchestrator import ChatOrchestrator
 from app.services.llm_client import RetrievalPlan
 from app.services.prompt_composer import PromptComposer
+from types import SimpleNamespace
 
 
 class EchoLLMClient:
@@ -28,6 +29,52 @@ class EchoLLMClient:
     def generate_reply(self, **kwargs) -> str:  # noqa: ANN003
         return "ok"
 
+    def generate_profile_decision(self, **kwargs) -> dict[str, object]:  # noqa: ANN003
+        user_texts = kwargs["user_texts"]
+        joined = " ".join(user_texts)
+        tone = "偏轻松口语" if "随意点" in joined else "自然中性"
+        return {
+            "profile_summary": "近期关注话题：学习与考试；表达相对完整。",
+            "preference_summary": "偏好信息已记录。",
+            "preferred_address": "阿林" if "阿林" in joined else "",
+            "tone_preference": tone,
+            "schedule_state": "学习周期",
+            "fatigue_level": 0.4,
+            "emotion_peak_level": 0.5,
+        }
+
+    def evolve_relation_decision(self, **kwargs) -> dict[str, object]:  # noqa: ANN003
+        relation_json = kwargs["relation_json"]
+        if "\"strength\": 0" in relation_json:
+            return {
+                "polarity": "neutral",
+                "strength": 0.3,
+                "trust_score": 0.3,
+                "intimacy_score": 0.3,
+                "dependency_score": 0.2,
+            }
+        return {
+            "polarity": "positive",
+            "strength": 0.6,
+            "trust_score": 0.6,
+            "intimacy_score": 0.6,
+            "dependency_score": 0.4,
+        }
+
+    def summarize_group_emotion(self, **kwargs):  # noqa: ANN003
+        return SimpleNamespace(score=0.0, text="群体情绪：中性平稳。")
+
+    def decide_cross_access(self, **kwargs):  # noqa: ANN003
+        memories = kwargs["memories"]
+        ids = {item["message_id"] for item in memories}
+
+        return SimpleNamespace(
+            allowed_message_ids=ids,
+            relation_denied=0,
+            similarity_denied=0,
+            preference_denied=0,
+        )
+
 
 class ProfileEchoLLMClient:
     def plan_retrieval(self, **kwargs) -> RetrievalPlan:  # noqa: ANN003
@@ -37,6 +84,40 @@ class ProfileEchoLLMClient:
     def generate_reply(self, **kwargs) -> str:  # noqa: ANN003
         prompt_context = kwargs["prompt_context"]
         return prompt_context.profile_context
+
+    def generate_profile_decision(self, **kwargs) -> dict[str, object]:  # noqa: ANN003
+        return {
+            "profile_summary": "近期关注话题：日常近况；表达相对完整。",
+            "preference_summary": "偏好信息已记录。",
+            "preferred_address": "小北",
+            "tone_preference": "偏正式克制",
+            "schedule_state": "常规节奏",
+            "fatigue_level": 0.3,
+            "emotion_peak_level": 0.4,
+        }
+
+    def evolve_relation_decision(self, **kwargs) -> dict[str, object]:  # noqa: ANN003
+        return {
+            "polarity": "neutral",
+            "strength": 0.4,
+            "trust_score": 0.4,
+            "intimacy_score": 0.4,
+            "dependency_score": 0.2,
+        }
+
+    def summarize_group_emotion(self, **kwargs):  # noqa: ANN003
+        return SimpleNamespace(score=0.0, text="群体情绪：中性平稳。")
+
+    def decide_cross_access(self, **kwargs):  # noqa: ANN003
+        memories = kwargs["memories"]
+        ids = {item["message_id"] for item in memories}
+
+        return SimpleNamespace(
+            allowed_message_ids=ids,
+            relation_denied=0,
+            similarity_denied=0,
+            preference_denied=0,
+        )
 
 
 def _build_orchestrator(db_path: str) -> tuple[ChatOrchestrator, SQLiteProfileRepo, SQLiteRelationRepo]:

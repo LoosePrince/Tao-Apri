@@ -20,6 +20,20 @@ class RetrievalPlan:
     reason: str = ""
 
 
+@dataclass(slots=True)
+class GroupEmotionDecision:
+    score: float
+    text: str
+
+
+@dataclass(slots=True)
+class CrossAccessDecision:
+    allowed_message_ids: set[str]
+    relation_denied: int
+    similarity_denied: int
+    preference_denied: int
+
+
 class LLMClient:
     def __init__(self) -> None:
         self._client: OpenAI | None = None
@@ -29,6 +43,125 @@ class LLMClient:
     @staticmethod
     def _render_template(template: str, values: dict[str, object]) -> str:
         return template.format(**values)
+
+    @staticmethod
+    def _extract_json(raw: str) -> dict[str, object]:
+        stripped = (raw or "").strip()
+        if not stripped:
+            return {}
+        try:
+            parsed = json.loads(stripped)
+            return parsed if isinstance(parsed, dict) else {}
+        except json.JSONDecodeError:
+            match = re.search(r"\{.*\}", stripped, flags=re.S)
+            if not match:
+                return {}
+            try:
+                parsed = json.loads(match.group(0))
+                return parsed if isinstance(parsed, dict) else {}
+            except json.JSONDecodeError:
+                return {}
+
+    def _call_json_decider(self, *, system_asset: str, user_asset: str, values: dict[str, object]) -> dict[str, object]:
+        provider = settings.llm.provider.lower().strip()
+        if provider != "kilo" or not settings.llm.api_key or self._is_circuit_open():
+            return {}
+        system_prompt = read_required_markdown_asset(system_asset)
+        user_template = read_required_markdown_asset(user_asset)
+        user_prompt = self._render_template(user_template, values)
+        client = self._get_client()
+        try:
+            response = client.chat.completions.create(
+                model=settings.llm.model,
+                temperature=0,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+            )
+            content = response.choices[0].message.content if response.choices else ""
+            self._on_request_success()
+            return self._extract_json(content or "")
+        except Exception as exc:
+            self._on_request_failure(exc)
+            logger.warning("JSON decider call failed | system_asset=%s | err=%s", system_asset, exc)
+            return {}
+
+    def classify_topic(self, text: str) -> str:
+        data = self._call_json_decider(
+            system_asset="prompt/ai_topic_system.md",
+            user_asset="prompt/ai_topic_user.md",
+            values={"text": text},
+        )
+        topic = str(data.get("topic", "")).strip()
+        allowed = {"学习与考试", "工作与职业", "作息与健康", "情绪与关系", "娱乐与兴趣", "日常近况"}
+        return topic if topic in allowed else "日常近况"
+
+    def generate_profile_decision(
+        self,
+        *,
+        user_texts: list[str],
+        current_hour: int,
+        session_emotion: float,
+        global_emotion: float,
+    ) -> dict[str, object]:
+        return self._call_json_decider(
+            system_asset="prompt/ai_profile_system.md",
+            user_asset="prompt/ai_profile_user.md",
+            values={
+                "current_hour": current_hour,
+                "session_emotion": f"{session_emotion:.4f}",
+                "global_emotion": f"{global_emotion:.4f}",
+                "user_texts": "\n".join(f"- {item}" for item in user_texts) or "- 无",
+            },
+        )
+
+    def evolve_relation_decision(self, *, relation_json: str, user_message: str, reply: str) -> dict[str, object]:
+        return self._call_json_decider(
+            system_asset="prompt/ai_relation_system.md",
+            user_asset="prompt/ai_relation_user.md",
+            values={"relation_json": relation_json, "user_message": user_message, "reply": reply},
+        )
+
+    def summarize_group_emotion(self, *, scores: list[float]) -> GroupEmotionDecision:
+        data = self._call_json_decider(
+            system_asset="prompt/ai_group_emotion_system.md",
+            user_asset="prompt/ai_group_emotion_user.md",
+            values={"scores_json": json.dumps(scores, ensure_ascii=False)},
+        )
+        score = float(data.get("group_emotion_avg", 0.0) or 0.0)
+        score = max(-1.0, min(1.0, score))
+        text = str(data.get("group_emotion_text", "")).strip() or "群体情绪：中性平稳。"
+        return GroupEmotionDecision(score=score, text=text)
+
+    def decide_cross_access(
+        self,
+        *,
+        viewer_user_id: str,
+        query: str,
+        memories: list[dict[str, object]],
+    ) -> CrossAccessDecision:
+        data = self._call_json_decider(
+            system_asset="prompt/ai_cross_access_system.md",
+            user_asset="prompt/ai_cross_access_user.md",
+            values={
+                "viewer_user_id": viewer_user_id,
+                "query": query,
+                "memories_json": json.dumps(memories, ensure_ascii=False),
+            },
+        )
+        raw_ids = data.get("allowed_message_ids", [])
+        allowed_ids = {
+            str(item).strip()
+            for item in (raw_ids if isinstance(raw_ids, list) else [])
+            if str(item).strip()
+        }
+        return CrossAccessDecision(
+            allowed_message_ids=allowed_ids,
+            relation_denied=int(data.get("relation_denied", 0) or 0),
+            similarity_denied=int(data.get("similarity_denied", 0) or 0),
+            preference_denied=int(data.get("preference_denied", 0) or 0),
+        )
 
     def generate_reply(
         self,
@@ -161,7 +294,8 @@ class LLMClient:
     @staticmethod
     def _service_unavailable_message() -> str:
         admin_id = str(settings.onebot.debug_only_user_id).strip()
-        return f"当前不可用，请联系管理员（debug账号：{admin_id}）"
+        template = read_required_markdown_asset("prompt/llm_unavailable.md")
+        return template.format(admin_id=admin_id)
 
     @staticmethod
     def _build_system_prompt(prompt_context: PromptContext) -> str:
