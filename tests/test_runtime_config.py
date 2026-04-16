@@ -33,6 +33,14 @@ def test_runtime_config_validate_rejects_storage_update() -> None:
     assert any("storage.sqlite_db_path" in e for e in errors)
 
 
+def test_runtime_config_validate_rejects_invalid_onebot_ws_url_scheme() -> None:
+    mgr = RuntimeConfigManager()
+    new_settings, errors = mgr.validate_update({"onebot": {"ws_url": "ttp://127.0.0.1:8080"}})
+    del new_settings
+    assert errors
+    assert any("onebot.ws_url" in e for e in errors)
+
+
 def test_container_apply_emotion_rebuilds_emotion_engine() -> None:
     snap = _snapshot_settings()
     old_engine_id = id(container.emotion_engine)

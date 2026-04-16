@@ -89,3 +89,5 @@
 - `ONEBOT__MESSAGE_FORMAT`：消息格式（当前按 `array` 处理）
 - `ONEBOT__RECONNECT_INTERVAL_SECONDS`：断线重连间隔
 - `ONEBOT__DEBUG_ONLY_USER_ID`：debug 模式仅处理的 QQ 用户 ID
+- `ONEBOT__FORCE_GROUP_WHITELIST`：是否启用群聊强制白名单（开启后仅处理白名单群）
+- `ONEBOT__GROUP_AUTONOMOUS_WHITELIST`：群白名单（JSON 数组，群号列表）

@@ -214,14 +214,19 @@ class OneBotWSClient:
             logger.exception("OneBot async process failed: %s", exc)
 
     async def _run_loop(self) -> None:
-        ws_url = _normalize_ws_url(settings.onebot.ws_url)
         headers = {"Authorization": f"Bearer {settings.onebot.token}"}
         while not self._stop_event.is_set():
             try:
+                ws_url = _normalize_ws_url(settings.onebot.ws_url)
                 logger.info("Connecting OneBot WS: %s", ws_url)
                 async with websockets.connect(ws_url, additional_headers=headers) as ws:
                     logger.info("OneBot WS connected.")
                     await self._consume(ws)
+            except ValueError as exc:
+                logger.error("OneBot config error: %s", exc)
+                if self._stop_event.is_set():
+                    break
+                await asyncio.sleep(settings.onebot.reconnect_interval_seconds)
             except Exception as exc:
                 logger.warning("OneBot WS disconnected: %s", exc)
                 await asyncio.sleep(settings.onebot.reconnect_interval_seconds)

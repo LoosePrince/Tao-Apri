@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Any, Literal
+from urllib.parse import urlparse
 
 from app.core.config import Settings, settings
 
@@ -202,6 +203,15 @@ class RuntimeConfigManager:
         for p in updated_paths:
             if self.get_field_level(p) == "read_only":
                 errors.append(f"Field is read_only: {p}")
+
+        onebot_updates = updates.get("onebot")
+        if isinstance(onebot_updates, dict) and "ws_url" in onebot_updates:
+            raw_url = str(onebot_updates.get("ws_url", "")).strip()
+            parsed = urlparse(raw_url)
+            if parsed.scheme.lower() not in {"http", "https", "ws", "wss"}:
+                errors.append(
+                    "Field invalid: onebot.ws_url must use http/https/ws/wss scheme"
+                )
 
         if errors:
             return settings, errors
