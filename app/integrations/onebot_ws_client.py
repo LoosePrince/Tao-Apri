@@ -219,9 +219,22 @@ class OneBotWSClient:
             try:
                 ws_url = _normalize_ws_url(settings.onebot.ws_url)
                 logger.info("Connecting OneBot WS: %s", ws_url)
-                async with websockets.connect(ws_url, additional_headers=headers) as ws:
-                    logger.info("OneBot WS connected.")
-                    await self._consume(ws)
+                try:
+                    async with websockets.connect(ws_url, additional_headers=headers) as ws:
+                        logger.info("OneBot WS connected.")
+                        await self._consume(ws)
+                except TypeError as exc:
+                    # Backward compatibility for older websockets versions
+                    # where connect() uses extra_headers instead of additional_headers.
+                    if "additional_headers" not in str(exc):
+                        raise
+                    logger.warning(
+                        "OneBot connect fallback to extra_headers due to websockets compatibility: %s",
+                        exc,
+                    )
+                    async with websockets.connect(ws_url, extra_headers=headers) as ws:
+                        logger.info("OneBot WS connected.")
+                        await self._consume(ws)
             except ValueError as exc:
                 logger.error("OneBot config error: %s", exc)
                 if self._stop_event.is_set():
