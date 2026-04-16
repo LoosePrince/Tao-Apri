@@ -12,6 +12,7 @@ import websockets
 from websockets.exceptions import ConnectionClosed
 
 from app.core.config import settings
+from app.domain.conversation_scope import ConversationScope
 from app.services.conversation_window_manager import ConversationWindowManager
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,27 @@ def _extract_text_from_array_message(message: Any) -> str:
         if seg_type == "text":
             text_parts.append(str(data.get("text", "")))
     return "".join(text_parts).strip()
+
+def _is_mentioned_in_array_message(message: Any, *, self_id: int) -> bool:
+    if not isinstance(message, list):
+        return False
+    for segment in message:
+        if not isinstance(segment, dict):
+            continue
+        if segment.get("type") != "at":
+            continue
+        data = segment.get("data", {}) or {}
+        qq = str(data.get("qq", "")).strip()
+        if not qq:
+            continue
+        if qq == "all":
+            return True
+        try:
+            if int(qq) == int(self_id):
+                return True
+        except Exception:
+            continue
+    return False
 
 
 class OneBotWSClient:
@@ -114,30 +136,45 @@ class OneBotWSClient:
             return 0.0
         return min(5.0, char_count / 5.0)
 
-    async def _send_reply_segments(self, ws: websockets.ClientConnection, *, user_id: int, reply: str) -> None:
+    async def _send_reply_segments(self, ws: websockets.ClientConnection, *, scope: ConversationScope, reply: str) -> None:
         segments = self._split_reply_segments(reply)
         if not segments:
             return
+        if scope.scene_type == "group" and not scope.group_id:
+            return
         for index, segment in enumerate(segments):
-            action_payload = {
-                "action": "send_private_msg",
-                "params": {
-                    "user_id": user_id,
-                    "message": segment,
-                },
-            }
+            if scope.scene_type == "group":
+                action_payload = {
+                    "action": "send_group_msg",
+                    "params": {
+                        "group_id": int(scope.group_id or 0),
+                        "message": segment,
+                    },
+                }
+            else:
+                action_payload = {
+                    "action": "send_private_msg",
+                    "params": {
+                        "user_id": int(scope.actor_user_id),
+                        "message": segment,
+                    },
+                }
             logger.debug("OneBot send payload: %s", action_payload)
             async with self._send_lock:
                 await ws.send(json.dumps(action_payload, ensure_ascii=False))
-            logger.info("OneBot reply segment sent | user_id=%s | len=%s", user_id, len(segment))
+            logger.info(
+                "OneBot reply segment sent | scope=%s | len=%s",
+                scope.scope_id,
+                len(segment),
+            )
             if index >= len(segments) - 1:
                 continue
             delay_seconds = self._segment_delay_seconds(segment)
             if delay_seconds <= 0:
                 continue
             logger.debug(
-                "OneBot segment delay | user_id=%s | len=%s | delay=%.2fs",
-                user_id,
+                "OneBot segment delay | scope=%s | len=%s | delay=%.2fs",
+                scope.scope_id,
                 len(segment),
                 delay_seconds,
             )
@@ -147,25 +184,25 @@ class OneBotWSClient:
         self,
         ws: websockets.ClientConnection,
         *,
-        user_id: int,
+        scope: ConversationScope,
         user_text: str,
         nickname: str | None = None,
     ) -> None:
         result = await asyncio.to_thread(
             self.window_manager.process_user_message,
-            user_id=str(user_id),
+            scope=scope,
             user_message=user_text,
             nickname=nickname,
         )
         logger.info(
-            "OneBot message processed | user_id=%s | session_id=%s | session_emotion=%.3f | global_emotion=%.3f",
-            user_id,
+            "OneBot message processed | scope=%s | session_id=%s | session_emotion=%.3f | global_emotion=%.3f",
+            scope.scope_id,
             result.session_id,
             result.session_emotion,
             result.global_emotion,
         )
         logger.debug("OneBot reply text: %s", result.reply)
-        await self._send_reply_segments(ws, user_id=user_id, reply=result.reply)
+        await self._send_reply_segments(ws, scope=scope, reply=result.reply)
 
     def _on_inflight_done(self, task: asyncio.Task) -> None:
         self._inflight_tasks.discard(task)
@@ -207,17 +244,19 @@ class OneBotWSClient:
         if event.get("post_type") != "message":
             logger.debug("Skip non-message event post_type=%s", event.get("post_type"))
             return
-        if event.get("message_type") != "private":
-            logger.debug("Skip non-private message type=%s", event.get("message_type"))
+        message_type = str(event.get("message_type", "") or "").strip()
+        if message_type not in {"private", "group"}:
+            logger.debug("Skip unsupported message type=%s", message_type)
             return
         self_id = int(event.get("self_id", 0) or 0)
         user_id = int(event.get("user_id", 0))
+        group_id = int(event.get("group_id", 0) or 0) if message_type == "group" else 0
         sender = event.get("sender")
         sender_user_id = 0
         if isinstance(sender, dict):
             sender_user_id = int(sender.get("user_id", 0) or 0)
         if self_id and sender_user_id == self_id:
-            logger.debug("Skip self-sent private message | self_id=%s | message_id=%s", self_id, event.get("message_id"))
+            logger.debug("Skip self-sent message | self_id=%s | message_id=%s", self_id, event.get("message_id"))
             return
         if settings.app.debug and user_id != settings.onebot.debug_only_user_id:
             logger.debug(
@@ -234,17 +273,31 @@ class OneBotWSClient:
             return
         message_id = str(event.get("message_id", "")).strip()
         if message_id and not self._remember_message_id(message_id):
-            logger.info("Skip duplicate private message | user_id=%s | message_id=%s", user_id, message_id)
+            logger.info("Skip duplicate message | user_id=%s | message_id=%s", user_id, message_id)
             return
-        logger.info("OneBot received private message | user_id=%s | text=%s", user_id, user_text)
+        if message_type == "group":
+            allow_autonomous = group_id in set(settings.onebot.group_autonomous_whitelist or [])
+            mentioned = _is_mentioned_in_array_message(message_payload, self_id=self_id)
+            if not allow_autonomous and not mentioned:
+                logger.debug(
+                    "Skip group message (not mentioned) | group_id=%s | user_id=%s | self_id=%s",
+                    group_id,
+                    user_id,
+                    self_id,
+                )
+                return
+        logger.info("OneBot received message | type=%s | user_id=%s | text=%s", message_type, user_id, user_text)
         logger.debug("OneBot full event payload: %s", event)
         sender_nickname: str | None = None
         if isinstance(sender, dict):
             raw_nick = sender.get("card") or sender.get("nickname") or sender.get("remark") or ""
             sender_nickname = str(raw_nick).strip() or None
 
-        task = asyncio.create_task(
-            self._process_message(ws, user_id=user_id, user_text=user_text, nickname=sender_nickname)
-        )
+        if message_type == "group":
+            scope = ConversationScope.group(platform="onebot", group_id=str(group_id), user_id=str(user_id))
+        else:
+            scope = ConversationScope.private(platform="onebot", user_id=str(user_id))
+
+        task = asyncio.create_task(self._process_message(ws, scope=scope, user_text=user_text, nickname=sender_nickname))
         self._inflight_tasks.add(task)
         task.add_done_callback(self._on_inflight_done)

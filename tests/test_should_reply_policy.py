@@ -137,7 +137,7 @@ def test_should_reply_false_skips_assistant_persistence_and_turn_count(tmp_path)
     roles = [m.role for m in messages]
     assert roles == ["user"]
 
-    session = session_repo.get_by_user_id("u_a")
+    session = session_repo.get_by_scope_id("private:u_a")
     assert session is not None
     assert session.turn_count == 0
 

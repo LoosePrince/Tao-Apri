@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 from app.core.config import settings
+from app.domain.conversation_scope import ConversationScope
 from app.domain.models import Session
 from app.domain.services.identity_service import IdentityService
 from app.repos.in_memory import InMemorySessionRepo, InMemoryUserRepo
@@ -14,6 +15,7 @@ def test_session_kept_within_renew_window() -> None:
     user_id = "user-keep"
     old = Session(
         session_id="session-old",
+        scope_id=f"private:{user_id}",
         user_id=user_id,
         turn_count=7,
         last_seen_at=datetime.now(timezone.utc) - timedelta(hours=2),
@@ -22,7 +24,7 @@ def test_session_kept_within_renew_window() -> None:
     original = settings.session.renew_after_hours
     try:
         settings.session.renew_after_hours = 3
-        _, session = service.ensure_user_and_session(user_id)
+        _, session = service.ensure_user_and_session(ConversationScope.private(platform="test", user_id=user_id))
         assert session.session_id == "session-old"
     finally:
         settings.session.renew_after_hours = original
@@ -35,6 +37,7 @@ def test_session_renewed_after_renew_window() -> None:
     user_id = "user-renew"
     old = Session(
         session_id="session-old",
+        scope_id=f"private:{user_id}",
         user_id=user_id,
         turn_count=9,
         last_seen_at=datetime.now(timezone.utc) - timedelta(hours=4),
@@ -43,7 +46,7 @@ def test_session_renewed_after_renew_window() -> None:
     original = settings.session.renew_after_hours
     try:
         settings.session.renew_after_hours = 3
-        _, session = service.ensure_user_and_session(user_id)
+        _, session = service.ensure_user_and_session(ConversationScope.private(platform="test", user_id=user_id))
         assert session.session_id != "session-old"
         assert session.turn_count == 0
     finally:

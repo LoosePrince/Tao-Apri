@@ -13,7 +13,10 @@ class User:
 @dataclass(slots=True)
 class Session:
     session_id: str
+    scope_id: str
     user_id: str
+    scene_type: str = "private"  # private | group
+    group_id: str | None = None
     turn_count: int = 0
     last_seen_at: datetime | None = None
 
@@ -27,6 +30,11 @@ class Message:
     sanitized_content: str
     created_at: datetime
     session_id: str
+    scope_id: str = ""
+    scene_type: str = "private"  # private | group
+    group_id: str | None = None
+    platform: str = ""
+    source_message_id: str | None = None
     emotion_score: float = 0.0
     related_user_ids: list[str] = field(default_factory=list)
     retrieval_meta: dict[str, float | int | str] = field(default_factory=dict)

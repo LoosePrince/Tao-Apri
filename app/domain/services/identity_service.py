@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from app.core.config import settings
+from app.domain.conversation_scope import ConversationScope
 from app.domain.models import Session, User
 from app.repos.interfaces import SessionRepo, UserRepo
 
@@ -11,7 +12,10 @@ class IdentityService:
         self.user_repo = user_repo
         self.session_repo = session_repo
 
-    def ensure_user_and_session(self, user_id: str, *, nickname: str | None = None) -> tuple[User, Session]:
+    def ensure_user_and_session(
+        self, scope: ConversationScope, *, nickname: str | None = None
+    ) -> tuple[User, Session]:
+        user_id = scope.actor_user_id
         user = self.user_repo.get(user_id) or User(user_id=user_id)
         if nickname:
             nick = nickname.strip()
@@ -20,7 +24,7 @@ class IdentityService:
                 user.nickname = nick
         user = self.user_repo.upsert(user)
 
-        session = self.session_repo.get_by_user_id(user_id)
+        session = self.session_repo.get_by_scope_id(scope.scope_id)
         now = datetime.now(timezone.utc)
         renew_delta_seconds = settings.session.renew_after_hours * 60 * 60
         should_renew = False
@@ -29,7 +33,13 @@ class IdentityService:
             should_renew = inactive_seconds >= renew_delta_seconds
 
         if not session or should_renew:
-            session = Session(session_id=str(uuid4()), user_id=user_id)
+            session = Session(
+                session_id=str(uuid4()),
+                scope_id=scope.scope_id,
+                user_id=user_id,
+                scene_type=scope.scene_type,
+                group_id=scope.group_id,
+            )
         session.last_seen_at = now
         self.session_repo.upsert(session)
         return user, session

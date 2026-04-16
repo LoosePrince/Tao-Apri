@@ -1,5 +1,6 @@
 from app.core.config import settings
 from app.core.metrics import MetricsRegistry
+from app.domain.conversation_scope import ConversationScope
 from app.services.chat_orchestrator import ChatResult
 from app.services.conversation_window_manager import ConversationWindowManager
 
@@ -13,15 +14,16 @@ def test_termination_keyword_triggers_new_round() -> None:
     settings.rhythm.terminate_keywords = ["算了"]
     calls: list[list[str]] = []
 
-    def _executor(user_id: str, batch: list[str], abort_requested: bool, nickname: str | None) -> ChatResult:
-        del user_id, abort_requested, nickname
+    def _executor(scope: ConversationScope, batch: list[str], abort_requested: bool, nickname: str | None) -> ChatResult:
+        del scope, abort_requested, nickname
         calls.append(batch)
         return ChatResult(session_id="s1", reply="ok", session_emotion=0.1, global_emotion=0.2)
 
     mgr = ConversationWindowManager(batch_executor=_executor, metrics=MetricsRegistry())
     mgr.start()
     try:
-        res = mgr.process_user_message(user_id="u1", user_message="算了，重新来")
+        scope = ConversationScope.private(platform="test", user_id="u1")
+        res = mgr.process_user_message(scope=scope, user_message="算了，重新来")
         assert res.reply == "ok"
         assert calls and calls[0] == ["算了，重新来"]
     finally:

@@ -24,6 +24,7 @@ from app.services.conversation_window_manager import ConversationWindowManager
 from app.services.llm_client import LLMClient
 from app.services.prompt_composer import PromptComposer
 from app.services.window_preprocessor import WindowPreprocessor
+from app.domain.conversation_scope import ConversationScope
 
 
 class Container:
@@ -98,8 +99,8 @@ class Container:
             metrics=self.metrics,
         )
         self.window_manager = ConversationWindowManager(
-            batch_executor=lambda user_id, batch, abort, nickname: self.chat_orchestrator.handle_window_batch(
-                user_id=user_id,
+            batch_executor=lambda scope, batch, abort, nickname: self.chat_orchestrator.handle_window_batch(
+                scope=scope,
                 user_messages=batch,
                 abort_requested=abort,
                 nickname=nickname,

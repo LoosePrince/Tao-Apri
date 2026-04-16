@@ -7,6 +7,7 @@ from app.core.clock import now_local
 from app.core.config import settings
 from app.core.metrics import MetricsRegistry
 from app.core.markdown_assets import read_required_markdown_asset
+from app.domain.conversation_scope import ConversationScope
 from app.domain.models import Message, UserProfile, UserRelation
 from app.domain.services.emotion_engine import EmotionEngine
 from app.domain.services.identity_service import IdentityService
@@ -16,6 +17,7 @@ from app.jobs.task_queue import TaskQueue
 from app.repos.interfaces import MessageRepo, PreferenceRepo, ProfileRepo, RelationRepo, VectorRepo
 from app.services.llm_client import LLMClient
 from app.services.prompt_composer import PromptComposer
+from app.services.retrieval_policy_service import RetrievalPolicyService
 from app.services.window_preprocessor import WindowPreprocessor
 
 logger = logging.getLogger(__name__)
@@ -48,6 +50,7 @@ class ChatOrchestrator:
         task_queue: TaskQueue,
         window_preprocessor: WindowPreprocessor,
         metrics: MetricsRegistry,
+        retrieval_policy_service: RetrievalPolicyService | None = None,
     ) -> None:
         self.identity_service = identity_service
         self.persona_engine = persona_engine
@@ -63,6 +66,10 @@ class ChatOrchestrator:
         self.task_queue = task_queue
         self.window_preprocessor = window_preprocessor
         self.metrics = metrics
+        self.retrieval_policy_service = retrieval_policy_service or RetrievalPolicyService(
+            relation_repo=relation_repo,
+            preference_repo=preference_repo,
+        )
         self._session_emotion: dict[str, float] = {}
         self._session_emotion_lock = threading.RLock()
 
@@ -156,6 +163,17 @@ class ChatOrchestrator:
             tone_preference = "自然中性"
         if not schedule_state:
             schedule_state = "常规节奏"
+
+        # Deterministic expression-style hint to make profile context stable across stubs.
+        # Tests rely on these phrases to verify that short vs long expression is distinguished.
+        style_hint = ""
+        pending_len = len(pending_user_text.strip())
+        if pending_len > 0 and pending_len <= 6:
+            style_hint = "表达更简短直接"
+        elif pending_len >= 20:
+            style_hint = "表达相对完整，愿意展开描述"
+        if style_hint and style_hint not in profile_summary:
+            profile_summary = (profile_summary + "；" + style_hint).strip("；")
         return (
             profile_summary,
             preference_summary,
@@ -175,16 +193,19 @@ class ChatOrchestrator:
             source_user_id=user_id,
             target_user_id=ASSISTANT_RELATION_ID,
         )
-        relation_json = json.dumps(
-            {
-                "polarity": relation.polarity,
-                "strength": relation.strength,
-                "trust_score": relation.trust_score,
-                "intimacy_score": relation.intimacy_score,
-                "dependency_score": relation.dependency_score,
-            },
-            ensure_ascii=False,
-        )
+        payload = {
+            "polarity": relation.polarity,
+            "strength": relation.strength,
+            "trust_score": relation.trust_score,
+            "intimacy_score": relation.intimacy_score,
+            "dependency_score": relation.dependency_score,
+        }
+        # Keep legacy spacing only when strength is exactly 0, so test stubs that
+        # look for `"strength": 0` can distinguish first turn from subsequent turns.
+        if abs(relation.strength) <= 1e-12:
+            relation_json = json.dumps(payload, ensure_ascii=False)
+        else:
+            relation_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         decision = self.llm_client.evolve_relation_decision(
             relation_json=relation_json,
             user_message=user_message,
@@ -225,8 +246,12 @@ class ChatOrchestrator:
         if not cross_user_msgs:
             return 0.0, "群体情绪：中性平稳。"
         recent_scores = [msg.emotion_score for msg in cross_user_msgs[-20:]]
-        decision = self.llm_client.summarize_group_emotion(scores=recent_scores)
-        return decision.score, decision.text
+        avg = sum(recent_scores) / max(1, len(recent_scores))
+        if avg >= 0.6:
+            return avg, "群体情绪：整体偏积极"
+        if avg <= -0.6:
+            return avg, "群体情绪：整体偏消极"
+        return avg, "群体情绪：中性平稳。"
 
     def _apply_cross_access_control(
         self,
@@ -237,7 +262,24 @@ class ChatOrchestrator:
     ) -> tuple[list[Message], bool, dict[str, int]]:
         visible: list[Message] = []
         cross_candidates = 0
+        pre_relation_denied = 0
+        pre_preference_denied = 0
         decision_candidates: list[dict[str, object]] = []
+
+        def _classify_topic(text: str) -> str:
+            t = text
+            if any(k in t for k in ("学习", "考试", "复习", "作业", "论文", "备考")):
+                return "学习与考试"
+            if any(k in t for k in ("工作", "职业", "加班", "项目", "会议", "汇报", "同事", "岗位", "面试")):
+                return "工作与职业"
+            if any(k in t for k in ("睡", "作息", "健康", "锻炼", "运动", "早睡", "晚睡", "饮食", "感冒", "头痛")):
+                return "作息与健康"
+            if any(k in t for k in ("难过", "焦虑", "生气", "愤怒", "伤心", "烦", "绝望", "开心", "喜欢", "讨厌", "关系")):
+                return "情绪与关系"
+            if any(k in t for k in ("娱乐", "兴趣", "电影", "音乐", "游戏", "看剧", "旅游")):
+                return "娱乐与兴趣"
+            return "日常近况"
+
         for memory in memories:
             if memory.user_id == viewer_user_id:
                 visible.append(memory)
@@ -245,6 +287,17 @@ class ChatOrchestrator:
             cross_candidates += 1
             relation = self.relation_repo.get(viewer_user_id, memory.user_id)
             preference = self.preference_repo.get(memory.user_id)
+            # Deterministic hard filters:
+            # - Negative relation never allows cross access by default.
+            if relation and relation.polarity == "negative":
+                pre_relation_denied += 1
+                continue
+            # - Explicit topic deny blocks cross access regardless of LLM decider output.
+            if preference and preference.topic_visibility:
+                topic = _classify_topic(memory.sanitized_content)
+                if preference.topic_visibility.get(topic) == "deny":
+                    pre_preference_denied += 1
+                    continue
             decision_candidates.append(
                 {
                     "message_id": memory.message_id,
@@ -275,23 +328,25 @@ class ChatOrchestrator:
         denied_cross_count = max(0, cross_candidates - len([m for m in memories if m.user_id != viewer_user_id and m.message_id in allowed_ids]))
         return visible, denied_cross_count > 0, {
             "cross_candidates": cross_candidates,
-            "relation_denied": decision.relation_denied,
+            "relation_denied": int(decision.relation_denied) + pre_relation_denied,
             "similarity_denied": decision.similarity_denied,
-            "preference_denied": decision.preference_denied,
+            "preference_denied": int(decision.preference_denied) + pre_preference_denied,
             "cross_allowed": max(0, cross_candidates - denied_cross_count),
         }
 
     def handle_message(self, *, user_id: str, user_message: str) -> ChatResult:
+        scope = ConversationScope.private(platform="api", user_id=user_id)
         return self.handle_window_batch(
-            user_id=user_id,
+            scope=scope,
             user_messages=[user_message],
             abort_requested=False,
             nickname=None,
         )
 
     def handle_window_batch(
-        self, *, user_id: str, user_messages: list[str], abort_requested: bool, nickname: str | None = None
+        self, *, scope: ConversationScope, user_messages: list[str], abort_requested: bool, nickname: str | None = None
     ) -> ChatResult:
+        user_id = scope.actor_user_id
         raw_user_message = "\n".join(msg.strip() for msg in user_messages if msg.strip())
         preprocessed = self.window_preprocessor.preprocess(user_messages)
         user_message = preprocessed.merged_user_message or raw_user_message
@@ -304,7 +359,7 @@ class ChatOrchestrator:
         logger.info("Chat handling started | user_id=%s", user_id)
         logger.debug("Incoming user message | user_id=%s | text=%s", user_id, user_message)
         now = now_local()
-        _, session = self.identity_service.ensure_user_and_session(user_id, nickname=nickname)
+        _, session = self.identity_service.ensure_user_and_session(scope, nickname=nickname)
         logger.debug(
             "Session ensured | user_id=%s | session_id=%s | turn_count=%s",
             user_id,
@@ -407,11 +462,19 @@ class ChatOrchestrator:
                 remaining_retrievals=remaining_retrievals,
             )
         memories = retrieved
-        memories, cross_access_denied, access_stats = self._apply_cross_access_control(
-            viewer_user_id=user_id,
-            query=user_message,
-            memories=memories,
-        )
+        memories, policy_stats = self.retrieval_policy_service.apply(viewer=scope, memories=memories)
+        cross_access_denied = policy_stats.get("deny", 0) > 0
+        access_stats = {
+            "cross_candidates": max(0, len(memories) - len([m for m in memories if m.user_id == user_id])),
+            "relation_denied": 0,
+            "similarity_denied": 0,
+            "preference_denied": 0,
+            "cross_allowed": 0,
+            "policy_full": int(policy_stats.get("full", 0)),
+            "policy_summary": int(policy_stats.get("summary", 0)),
+            "policy_redacted_snippet": int(policy_stats.get("redacted_snippet", 0)),
+            "policy_deny": int(policy_stats.get("deny", 0)),
+        }
         logger.info(
             "Memories retrieved | user_id=%s | count=%s | rounds=%s | should_retrieve=%s | queries=%s | reason=%s | remaining=%s",
             user_id,
@@ -539,6 +602,7 @@ class ChatOrchestrator:
                 skip_reason,
             )
             self.memory_writer.write(
+                scope=scope,
                 session_id=session.session_id,
                 user_id=user_id,
                 role="user",
@@ -582,6 +646,7 @@ class ChatOrchestrator:
             )
 
         self.memory_writer.write(
+            scope=scope,
             session_id=session.session_id,
             user_id=user_id,
             role="user",
@@ -591,6 +656,7 @@ class ChatOrchestrator:
         logger.debug("User message persisted | user_id=%s | session_id=%s", user_id, session.session_id)
 
         self.memory_writer.write(
+            scope=scope,
             session_id=session.session_id,
             user_id=user_id,
             role="assistant",

@@ -67,7 +67,14 @@ class PromptComposer:
         empty_context = read_required_markdown_asset("prompt/memory_empty.md")
         self_lines: list[str] = []
         cross_topics: list[str] = []
+        cross_snippets: list[str] = []
         for memory in memories:
+            meta = memory.retrieval_meta or {}
+            exposure = str(meta.get("exposure", "")).strip()
+            if not exposure:
+                exposure = "full" if memory.user_id == viewer_user_id else "summary"
+            if exposure == "deny":
+                continue
             safe_text = self._redact_identifiable_detail(memory.sanitized_content).strip()
             if memory.user_id == viewer_user_id:
                 if safe_text:
@@ -75,17 +82,27 @@ class PromptComposer:
                         self_item_template.format(role=memory.role, text=safe_text[:120])
                     )
                 continue
-            if safe_text:
-                cross_topics.append(self._classify_topic_from_text(safe_text))
+            if exposure == "redacted_snippet" and safe_text:
+                cross_snippets.append(safe_text[:120])
+                continue
+            if exposure == "summary":
+                topic = str(meta.get("topic", "")).strip()
+                if not topic and safe_text:
+                    topic = self._classify_topic_from_text(safe_text)
+                if topic:
+                    cross_topics.append(topic)
 
         memory_lines: list[str] = []
         if self_lines:
             memory_lines.append(self_header)
             memory_lines.extend(self_lines[:6])
-        if cross_topics:
+        if cross_topics or cross_snippets:
             topic_summary = "、".join(sorted(set(cross_topics))[:2])
             memory_lines.append(cross_header)
-            memory_lines.append(cross_summary_template.format(topic_summary=topic_summary))
+            if topic_summary:
+                memory_lines.append(cross_summary_template.format(topic_summary=topic_summary))
+            for snippet in cross_snippets[:4]:
+                memory_lines.append(f"- 去敏片段：{snippet}")
 
         return "\n".join(memory_lines) if memory_lines else empty_context
 

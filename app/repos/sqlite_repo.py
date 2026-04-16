@@ -72,7 +72,10 @@ class SQLiteStore:
             );
             CREATE TABLE IF NOT EXISTS sessions (
                 session_id TEXT PRIMARY KEY,
-                user_id TEXT NOT NULL UNIQUE,
+                scope_id TEXT NOT NULL UNIQUE,
+                user_id TEXT NOT NULL,
+                scene_type TEXT NOT NULL DEFAULT 'private',
+                group_id TEXT NULL,
                 turn_count INTEGER NOT NULL DEFAULT 0,
                 last_seen_at TEXT NULL
             );
@@ -84,6 +87,11 @@ class SQLiteStore:
                 sanitized_content TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 session_id TEXT NOT NULL,
+                scope_id TEXT NOT NULL DEFAULT '',
+                scene_type TEXT NOT NULL DEFAULT 'private',
+                group_id TEXT NULL,
+                platform TEXT NOT NULL DEFAULT '',
+                source_message_id TEXT NULL,
                 emotion_score REAL NOT NULL,
                 related_user_ids TEXT NOT NULL
             );
@@ -104,6 +112,10 @@ class SQLiteStore:
                 embedding TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 time_bucket TEXT NOT NULL,
+                scope_id TEXT NOT NULL DEFAULT '',
+                scene_type TEXT NOT NULL DEFAULT 'private',
+                group_id TEXT NULL,
+                platform TEXT NOT NULL DEFAULT '',
                 heat_score REAL NOT NULL DEFAULT 0,
                 access_count INTEGER NOT NULL DEFAULT 0,
                 last_accessed_at TEXT NOT NULL DEFAULT ''
@@ -142,6 +154,80 @@ class SQLiteStore:
                 emotion_peak_level REAL NOT NULL DEFAULT 0,
                 updated_at TEXT NOT NULL
             );
+            """
+        )
+        # Migrate legacy sessions table (user_id UNIQUE) to scope_id-based sessions.
+        existing_tables = {
+            row["name"] for row in self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        }
+        if "sessions" in existing_tables:
+            session_cols = {
+                row["name"]
+                for row in self.conn.execute("PRAGMA table_info(sessions)").fetchall()
+            }
+            if "scope_id" not in session_cols:
+                # Legacy schema detected, rebuild sessions table.
+                self.conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS sessions_new (
+                        session_id TEXT PRIMARY KEY,
+                        scope_id TEXT NOT NULL UNIQUE,
+                        user_id TEXT NOT NULL,
+                        scene_type TEXT NOT NULL DEFAULT 'private',
+                        group_id TEXT NULL,
+                        turn_count INTEGER NOT NULL DEFAULT 0,
+                        last_seen_at TEXT NULL
+                    )
+                    """
+                )
+                self.conn.execute(
+                    """
+                    INSERT INTO sessions_new (session_id, scope_id, user_id, scene_type, group_id, turn_count, last_seen_at)
+                    SELECT session_id, 'private:' || user_id, user_id, 'private', NULL, turn_count, last_seen_at
+                    FROM sessions
+                    """
+                )
+                self.conn.execute("DROP TABLE sessions")
+                self.conn.execute("ALTER TABLE sessions_new RENAME TO sessions")
+
+        # Migrate legacy messages/vector columns (additive).
+        message_cols = {
+            row["name"]
+            for row in self.conn.execute("PRAGMA table_info(messages)").fetchall()
+        }
+        if "scope_id" not in message_cols:
+            self.conn.execute("ALTER TABLE messages ADD COLUMN scope_id TEXT NOT NULL DEFAULT ''")
+        if "scene_type" not in message_cols:
+            self.conn.execute("ALTER TABLE messages ADD COLUMN scene_type TEXT NOT NULL DEFAULT 'private'")
+        if "group_id" not in message_cols:
+            self.conn.execute("ALTER TABLE messages ADD COLUMN group_id TEXT NULL")
+        if "platform" not in message_cols:
+            self.conn.execute("ALTER TABLE messages ADD COLUMN platform TEXT NOT NULL DEFAULT ''")
+        if "source_message_id" not in message_cols:
+            self.conn.execute("ALTER TABLE messages ADD COLUMN source_message_id TEXT NULL")
+        self.conn.execute(
+            "UPDATE messages SET scope_id = 'private:' || user_id WHERE scope_id = ''"
+        )
+
+        vector_cols = {
+            row["name"]
+            for row in self.conn.execute("PRAGMA table_info(vector_index)").fetchall()
+        }
+        if "scope_id" not in vector_cols:
+            self.conn.execute("ALTER TABLE vector_index ADD COLUMN scope_id TEXT NOT NULL DEFAULT ''")
+        if "scene_type" not in vector_cols:
+            self.conn.execute("ALTER TABLE vector_index ADD COLUMN scene_type TEXT NOT NULL DEFAULT 'private'")
+        if "group_id" not in vector_cols:
+            self.conn.execute("ALTER TABLE vector_index ADD COLUMN group_id TEXT NULL")
+        if "platform" not in vector_cols:
+            self.conn.execute("ALTER TABLE vector_index ADD COLUMN platform TEXT NOT NULL DEFAULT ''")
+        self.conn.execute(
+            """
+            UPDATE vector_index
+            SET scope_id = (
+                SELECT m.scope_id FROM messages m WHERE m.message_id = vector_index.message_id
+            )
+            WHERE scope_id = ''
             """
         )
         vector_columns = {
@@ -245,16 +331,19 @@ class SQLiteSessionRepo(SessionRepo):
     def __init__(self, store: SQLiteStore) -> None:
         self.store = store
 
-    def get_by_user_id(self, user_id: str) -> Session | None:
+    def get_by_scope_id(self, scope_id: str) -> Session | None:
         row = self.store.conn.execute(
-            "SELECT session_id, user_id, turn_count, last_seen_at FROM sessions WHERE user_id = ?",
-            (user_id,),
+            "SELECT session_id, scope_id, user_id, scene_type, group_id, turn_count, last_seen_at FROM sessions WHERE scope_id = ?",
+            (scope_id,),
         ).fetchone()
         if not row:
             return None
         return Session(
             session_id=row["session_id"],
+            scope_id=row["scope_id"],
             user_id=row["user_id"],
+            scene_type=row["scene_type"],
+            group_id=row["group_id"],
             turn_count=row["turn_count"],
             last_seen_at=_parse_dt(row["last_seen_at"]),
         )
@@ -262,16 +351,22 @@ class SQLiteSessionRepo(SessionRepo):
     def upsert(self, session: Session) -> Session:
         self.store.conn.execute(
             """
-            INSERT INTO sessions (session_id, user_id, turn_count, last_seen_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(user_id) DO UPDATE SET
+            INSERT INTO sessions (session_id, scope_id, user_id, scene_type, group_id, turn_count, last_seen_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(scope_id) DO UPDATE SET
                 session_id = excluded.session_id,
+                user_id = excluded.user_id,
+                scene_type = excluded.scene_type,
+                group_id = excluded.group_id,
                 turn_count = excluded.turn_count,
                 last_seen_at = excluded.last_seen_at
             """,
             (
                 session.session_id,
+                session.scope_id,
                 session.user_id,
+                session.scene_type,
+                session.group_id,
                 session.turn_count,
                 session.last_seen_at.isoformat() if session.last_seen_at else None,
             ),
@@ -289,9 +384,10 @@ class SQLiteMessageRepo(MessageRepo):
             """
             INSERT INTO messages (
                 message_id, user_id, role, raw_content, sanitized_content,
-                created_at, session_id, emotion_score, related_user_ids
+                created_at, session_id, scope_id, scene_type, group_id, platform, source_message_id,
+                emotion_score, related_user_ids
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 message.message_id,
@@ -301,6 +397,11 @@ class SQLiteMessageRepo(MessageRepo):
                 message.sanitized_content,
                 message.created_at.isoformat(),
                 message.session_id,
+                message.scope_id,
+                message.scene_type,
+                message.group_id,
+                message.platform,
+                message.source_message_id,
                 message.emotion_score,
                 json.dumps(message.related_user_ids, ensure_ascii=False),
             ),
@@ -317,6 +418,11 @@ class SQLiteMessageRepo(MessageRepo):
             sanitized_content=row["sanitized_content"],
             created_at=datetime.fromisoformat(row["created_at"]),
             session_id=row["session_id"],
+            scope_id=row["scope_id"],
+            scene_type=row["scene_type"],
+            group_id=row["group_id"],
+            platform=row["platform"],
+            source_message_id=row["source_message_id"],
             emotion_score=float(row["emotion_score"]),
             related_user_ids=json.loads(row["related_user_ids"]),
             retrieval_meta={},
@@ -402,16 +508,22 @@ class SQLiteVectorRepo(VectorRepo):
         self.store.conn.execute(
             """
             INSERT INTO vector_index (
-                message_id, user_id, related_user_ids, sanitized_content, embedding, created_at, time_bucket, heat_score, access_count, last_accessed_at
+                message_id, user_id, related_user_ids, sanitized_content, embedding, created_at, time_bucket,
+                scope_id, scene_type, group_id, platform,
+                heat_score, access_count, last_accessed_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(message_id) DO UPDATE SET
                 user_id = excluded.user_id,
                 related_user_ids = excluded.related_user_ids,
                 sanitized_content = excluded.sanitized_content,
                 embedding = excluded.embedding,
                 created_at = excluded.created_at,
-                time_bucket = excluded.time_bucket
+                time_bucket = excluded.time_bucket,
+                scope_id = excluded.scope_id,
+                scene_type = excluded.scene_type,
+                group_id = excluded.group_id,
+                platform = excluded.platform
             """,
             (
                 message.message_id,
@@ -421,6 +533,10 @@ class SQLiteVectorRepo(VectorRepo):
                 json.dumps(vec),
                 message.created_at.isoformat(),
                 time_bucket,
+                message.scope_id,
+                message.scene_type,
+                message.group_id,
+                message.platform,
                 0.0,
                 0,
                 "",
@@ -443,7 +559,7 @@ class SQLiteVectorRepo(VectorRepo):
             """
             SELECT
                 m.message_id, m.user_id, m.role, m.raw_content, m.sanitized_content,
-                m.created_at, m.session_id, m.emotion_score, m.related_user_ids,
+                m.created_at, m.session_id, m.scope_id, m.scene_type, m.group_id, m.platform, m.source_message_id, m.emotion_score, m.related_user_ids,
                 v.embedding, v.created_at as v_created_at, v.heat_score, v.access_count, v.last_accessed_at
             FROM vector_index v
             JOIN messages m ON m.message_id = v.message_id
@@ -478,6 +594,11 @@ class SQLiteVectorRepo(VectorRepo):
                         sanitized_content=row["sanitized_content"],
                         created_at=datetime.fromisoformat(row["created_at"]),
                         session_id=row["session_id"],
+                        scope_id=row["scope_id"],
+                        scene_type=row["scene_type"],
+                        group_id=row["group_id"],
+                        platform=row["platform"],
+                        source_message_id=row["source_message_id"],
                         emotion_score=float(row["emotion_score"]),
                         related_user_ids=related_user_ids,
                         retrieval_meta={

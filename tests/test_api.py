@@ -33,7 +33,7 @@ def test_chat_and_session_flow() -> None:
     assert data["reply"].strip() != ""
     assert isinstance(data["global_emotion"], float)
 
-    session_res = client.get(f"/session/{user_id}")
+    session_res = client.get(f"/session/private:{user_id}")
     assert session_res.status_code == 200
     session_data = session_res.json()
     assert session_data["user_id"] == user_id

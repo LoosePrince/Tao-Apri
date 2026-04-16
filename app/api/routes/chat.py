@@ -4,14 +4,16 @@ from fastapi import APIRouter
 
 from app.api.schemas import ChatRequest, ChatResponse
 from app.core.container import container
+from app.domain.conversation_scope import ConversationScope
 
 router = APIRouter()
 
 
 @router.post("", response_model=ChatResponse)
 def chat(payload: ChatRequest) -> ChatResponse:
+    scope = ConversationScope.private(platform="api", user_id=payload.user_id)
     result = container.window_manager.process_user_message(
-        user_id=payload.user_id,
+        scope=scope,
         user_message=payload.message,
     )
     return ChatResponse(

@@ -1,5 +1,6 @@
 from app.core.config import settings
 from app.core.metrics import MetricsRegistry
+from app.domain.conversation_scope import ConversationScope
 from app.services.chat_orchestrator import ChatResult
 from app.services.conversation_window_manager import ConversationWindowManager
 import pytest
@@ -12,15 +13,16 @@ def test_window_lock_and_handover() -> None:
     settings.rhythm.wait_timeout_seconds = 2.0
     calls: list[list[str]] = []
 
-    def _executor(user_id: str, batch: list[str], abort_requested: bool, nickname: str | None) -> ChatResult:
-        del user_id, abort_requested, nickname
+    def _executor(scope: ConversationScope, batch: list[str], abort_requested: bool, nickname: str | None) -> ChatResult:
+        del scope, abort_requested, nickname
         calls.append(batch)
         return ChatResult(session_id="s1", reply="ok", session_emotion=0.1, global_emotion=0.2)
 
     mgr = ConversationWindowManager(batch_executor=_executor, metrics=MetricsRegistry())
     mgr.start()
     try:
-        result = mgr.process_user_message(user_id="u1", user_message="你好")
+        scope = ConversationScope.private(platform="test", user_id="u1")
+        result = mgr.process_user_message(scope=scope, user_message="你好")
         assert result.reply == "ok"
         assert calls and calls[0] == ["你好"]
     finally:
@@ -43,8 +45,8 @@ def test_window_batch_executor_exception_recovers_state() -> None:
     calls: list[list[str]] = []
     n = {"v": 0}
 
-    def _executor(user_id: str, batch: list[str], abort_requested: bool, nickname: str | None) -> ChatResult:
-        del user_id, abort_requested, nickname
+    def _executor(scope: ConversationScope, batch: list[str], abort_requested: bool, nickname: str | None) -> ChatResult:
+        del scope, abort_requested, nickname
         calls.append(batch)
         n["v"] += 1
         if n["v"] == 1:
@@ -54,10 +56,11 @@ def test_window_batch_executor_exception_recovers_state() -> None:
     mgr = ConversationWindowManager(batch_executor=_executor, metrics=MetricsRegistry())
     mgr.start()
     try:
+        scope = ConversationScope.private(platform="test", user_id="u1")
         with pytest.raises(RuntimeError, match="boom"):
-            mgr.process_user_message(user_id="u1", user_message="m1")
+            mgr.process_user_message(scope=scope, user_message="m1")
 
-        result = mgr.process_user_message(user_id="u1", user_message="m2")
+        result = mgr.process_user_message(scope=scope, user_message="m2")
         assert result.reply == "ok2"
         assert calls and calls[0] == ["m1"]
         assert calls and calls[1] == ["m2"]

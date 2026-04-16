@@ -8,6 +8,7 @@ from typing import Callable
 
 from app.core.config import settings
 from app.core.metrics import MetricsRegistry
+from app.domain.conversation_scope import ConversationScope
 from app.services.chat_orchestrator import ChatResult
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,7 @@ class WindowState:
     mode: str = "LISTENING"
     q1: list[str] = field(default_factory=list)
     q2: list[str] = field(default_factory=list)
+    last_scope: ConversationScope | None = None
     last_nickname: str | None = None
     silence_deadline: float | None = None
     cooldown_until: float = 0.0
@@ -40,7 +42,7 @@ class ConversationWindowManager:
     def __init__(
         self,
         *,
-        batch_executor: Callable[[str, list[str], bool, str | None], ChatResult],
+        batch_executor: Callable[[ConversationScope, list[str], bool, str | None], ChatResult],
         metrics: MetricsRegistry,
     ) -> None:
         self.batch_executor = batch_executor
@@ -64,11 +66,11 @@ class ConversationWindowManager:
         self._thread = None
 
     def process_user_message(
-        self, *, user_id: str, user_message: str, nickname: str | None = None
+        self, *, scope: ConversationScope, user_message: str, nickname: str | None = None
     ) -> ChatResult:
         started = time.monotonic()
         try:
-            result = self._enqueue_and_wait(user_id=user_id, user_message=user_message, nickname=nickname)
+            result = self._enqueue_and_wait(scope=scope, user_message=user_message, nickname=nickname)
             self.metrics.observe_request(latency_ms=(time.monotonic() - started) * 1000.0, is_error=False)
             return result
         except Exception:
@@ -76,16 +78,17 @@ class ConversationWindowManager:
             self.metrics.inc("error_count")
             raise
 
-    def _state_for(self, user_id: str) -> WindowState:
-        if user_id not in self._states:
-            self._states[user_id] = WindowState()
-        return self._states[user_id]
+    def _state_for(self, scope_id: str) -> WindowState:
+        if scope_id not in self._states:
+            self._states[scope_id] = WindowState()
+        return self._states[scope_id]
 
-    def _enqueue_and_wait(self, *, user_id: str, user_message: str, nickname: str | None) -> ChatResult:
-        state = self._state_for(user_id)
+    def _enqueue_and_wait(self, *, scope: ConversationScope, user_message: str, nickname: str | None) -> ChatResult:
+        state = self._state_for(scope.scope_id)
         now = time.monotonic()
         delayed_trigger_deadline: float | None = None
         with state.lock:
+            state.last_scope = scope
             if nickname:
                 nick = nickname.strip()
                 if nick:
@@ -129,12 +132,12 @@ class ConversationWindowManager:
         if delayed_trigger_deadline is not None:
             threading.Thread(
                 target=self._delayed_trigger,
-                args=(user_id, delayed_trigger_deadline),
-                name=f"window-delayed-trigger-{user_id}",
+                args=(scope.scope_id, delayed_trigger_deadline),
+                name=f"window-delayed-trigger-{scope.scope_id}",
                 daemon=True,
             ).start()
         if not waiter.event.wait(timeout=settings.rhythm.wait_timeout_seconds):
-            raise TimeoutError(f"Conversation window timed out for user={user_id}")
+            raise TimeoutError(f"Conversation window timed out for scope={scope.scope_id}")
         result = waiter.holder.get("result")
         if isinstance(result, Exception):
             raise result
@@ -146,7 +149,7 @@ class ConversationWindowManager:
         while not self._stop_event.is_set():
             try:
                 now = time.monotonic()
-                for user_id, state in list(self._states.items()):
+                for scope_id, state in list(self._states.items()):
                     try:
                         with state.lock:
                             if (
@@ -165,25 +168,25 @@ class ConversationWindowManager:
                                 self.metrics.inc("lock_trigger_count")
                                 threading.Thread(
                                     target=self._run_batch,
-                                    args=(user_id, batch, state.active_round),
-                                    name=f"window-batch-{user_id}",
+                                    args=(scope_id, batch, state.active_round),
+                                    name=f"window-batch-{scope_id}",
                                     daemon=True,
                                 ).start()
                     except Exception:
-                        logger.exception("ConversationWindowManager loop error | user_id=%s", user_id)
+                        logger.exception("ConversationWindowManager loop error | scope_id=%s", scope_id)
             except Exception:
                 logger.exception("ConversationWindowManager loop fatal error")
             time.sleep(0.05)
 
-    def _delayed_trigger(self, user_id: str, scheduled_deadline: float) -> None:
+    def _delayed_trigger(self, scope_id: str, scheduled_deadline: float) -> None:
         """
         Fallback scheduler: trigger a batch when _loop() is unavailable.
         """
         # Wait until the scheduled deadline (or stop).
         while not self._stop_event.is_set():
             now = time.monotonic()
-            with self._state_for(user_id).lock:
-                state = self._state_for(user_id)
+            with self._state_for(scope_id).lock:
+                state = self._state_for(scope_id)
                 if state.mode != "LISTENING" or not state.q1 or state.silence_deadline is None:
                     state.batch_scheduled = False
                     return
@@ -197,12 +200,12 @@ class ConversationWindowManager:
             time.sleep(min(0.2, remaining))
 
         if self._stop_event.is_set():
-            with self._state_for(user_id).lock:
-                self._state_for(user_id).batch_scheduled = False
+            with self._state_for(scope_id).lock:
+                self._state_for(scope_id).batch_scheduled = False
             return
 
         now = time.monotonic()
-        state = self._state_for(user_id)
+        state = self._state_for(scope_id)
         with state.lock:
             if (
                 state.mode != "LISTENING"
@@ -225,21 +228,25 @@ class ConversationWindowManager:
 
         threading.Thread(
             target=self._run_batch,
-            args=(user_id, batch, state.active_round),
-            name=f"window-batch-{user_id}",
+            args=(scope_id, batch, state.active_round),
+            name=f"window-batch-{scope_id}",
             daemon=True,
         ).start()
 
-    def _run_batch(self, user_id: str, batch: list[str], round_id: int) -> None:
-        state = self._state_for(user_id)
+    def _run_batch(self, scope_id: str, batch: list[str], round_id: int) -> None:
+        state = self._state_for(scope_id)
         with state.lock:
             state.mode = "RESPONDING"
             abort_requested = state.abort_requested
             nickname_for_batch = state.last_nickname
+            scope_for_batch = state.last_scope
 
         def _fallback_timeout_result() -> ChatResult:
+            scope_label = scope_id
+            if scope_for_batch is not None:
+                scope_label = scope_for_batch.scope_id
             return ChatResult(
-                session_id=f"timeout-{user_id}-{round_id}",
+                session_id=f"timeout-{scope_label}-{round_id}",
                 reply="（本轮思考超时，已中断当前回答。请继续发送，我会基于新一轮继续处理。）",
                 session_emotion=0.0,
                 global_emotion=0.0,
@@ -254,7 +261,9 @@ class ConversationWindowManager:
 
             def _execute() -> None:
                 try:
-                    holder["result"] = self.batch_executor(user_id, batch, abort_requested, nickname_for_batch)
+                    if scope_for_batch is None:
+                        raise RuntimeError("Missing ConversationScope for batch execution")
+                    holder["result"] = self.batch_executor(scope_for_batch, batch, abort_requested, nickname_for_batch)
                 except Exception as exc:  # pragma: no cover
                     holder["result"] = exc
                 finally:
@@ -262,7 +271,7 @@ class ConversationWindowManager:
 
             threading.Thread(
                 target=_execute,
-                name=f"window-batch-exec-{user_id}-{round_id}",
+                    name=f"window-batch-exec-{scope_id}-{round_id}",
                 daemon=True,
             ).start()
 

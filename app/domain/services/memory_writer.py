@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
+from app.domain.conversation_scope import ConversationScope
 from app.domain.models import MemoryFact, Message
 from app.repos.interfaces import FactRepo, MessageRepo, VectorRepo
 
@@ -68,12 +69,14 @@ class MemoryWriter:
     def write(
         self,
         *,
+        scope: ConversationScope | None = None,
         session_id: str,
         user_id: str,
         role: str,
         content: str,
         emotion_score: float,
     ) -> Message:
+        effective_scope = scope or ConversationScope.private(platform="unknown", user_id=user_id)
         message = Message(
             message_id=str(uuid4()),
             user_id=user_id,
@@ -82,6 +85,10 @@ class MemoryWriter:
             sanitized_content=self.sanitize(content),
             created_at=datetime.now(timezone.utc),
             session_id=session_id,
+            scope_id=effective_scope.scope_id,
+            scene_type=effective_scope.scene_type,
+            group_id=effective_scope.group_id,
+            platform=effective_scope.platform,
             emotion_score=emotion_score,
             related_user_ids=self.extract_related_users(content),
         )

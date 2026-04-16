@@ -42,18 +42,18 @@ class InMemoryUserRepo(UserRepo):
 
 class InMemorySessionRepo(SessionRepo):
     def __init__(self) -> None:
-        self._sessions_by_user: dict[str, Session] = {}
+        self._sessions_by_scope: dict[str, Session] = {}
 
-    def get_by_user_id(self, user_id: str) -> Session | None:
-        return self._sessions_by_user.get(user_id)
+    def get_by_scope_id(self, scope_id: str) -> Session | None:
+        return self._sessions_by_scope.get(scope_id)
 
     def upsert(self, session: Session) -> Session:
-        self._sessions_by_user[session.user_id] = session
+        self._sessions_by_scope[session.scope_id] = session
         return session
 
     @staticmethod
-    def new_session(user_id: str) -> Session:
-        return Session(session_id=str(uuid4()), user_id=user_id)
+    def new_session(scope_id: str, user_id: str) -> Session:
+        return Session(session_id=str(uuid4()), scope_id=scope_id, user_id=user_id)
 
 
 class InMemoryMessageRepo(MessageRepo):
