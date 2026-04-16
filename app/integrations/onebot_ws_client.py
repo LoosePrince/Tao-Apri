@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from typing import Any
 from urllib.parse import urlparse, urlunparse
 
@@ -49,6 +50,26 @@ class OneBotWSClient:
         self._task: asyncio.Task | None = None
         self._send_lock = asyncio.Lock()
         self._inflight_tasks: set[asyncio.Task] = set()
+        self._processed_message_ids: dict[str, float] = {}
+        self._processed_message_ttl_seconds = 600.0
+        self._processed_message_max_entries = 4096
+
+    def _remember_message_id(self, message_id: str) -> bool:
+        now = time.monotonic()
+        expired_before = now - self._processed_message_ttl_seconds
+        stale_ids = [key for key, seen_at in self._processed_message_ids.items() if seen_at < expired_before]
+        for stale_id in stale_ids:
+            self._processed_message_ids.pop(stale_id, None)
+
+        if message_id in self._processed_message_ids:
+            return False
+
+        if len(self._processed_message_ids) >= self._processed_message_max_entries:
+            oldest_id = next(iter(self._processed_message_ids))
+            self._processed_message_ids.pop(oldest_id, None)
+
+        self._processed_message_ids[message_id] = now
+        return True
 
     async def start(self) -> None:
         if not settings.onebot.enabled:
@@ -166,7 +187,15 @@ class OneBotWSClient:
         if event.get("message_type") != "private":
             logger.debug("Skip non-private message type=%s", event.get("message_type"))
             return
+        self_id = int(event.get("self_id", 0) or 0)
         user_id = int(event.get("user_id", 0))
+        sender = event.get("sender")
+        sender_user_id = 0
+        if isinstance(sender, dict):
+            sender_user_id = int(sender.get("user_id", 0) or 0)
+        if self_id and sender_user_id == self_id:
+            logger.debug("Skip self-sent private message | self_id=%s | message_id=%s", self_id, event.get("message_id"))
+            return
         if settings.app.debug and user_id != settings.onebot.debug_only_user_id:
             logger.debug(
                 "Skip message by debug filter user_id=%s expected=%s",
@@ -179,6 +208,10 @@ class OneBotWSClient:
         user_text = _extract_text_from_array_message(message_payload)
         if not user_text:
             logger.debug("Skip empty text message payload=%s", message_payload)
+            return
+        message_id = str(event.get("message_id", "")).strip()
+        if message_id and not self._remember_message_id(message_id):
+            logger.info("Skip duplicate private message | user_id=%s | message_id=%s", user_id, message_id)
             return
         logger.info("OneBot received private message | user_id=%s | text=%s", user_id, user_text)
         logger.debug("OneBot full event payload: %s", event)
