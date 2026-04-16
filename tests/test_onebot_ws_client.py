@@ -10,7 +10,11 @@ class _StubWindowManager:
 
 
 class _StubWS:
+    def __init__(self) -> None:
+        self.sent_payloads: list[str] = []
+
     async def send(self, _: str) -> None:
+        self.sent_payloads.append(_)
         return None
 
 
@@ -66,3 +70,34 @@ def test_onebot_self_sent_message_is_skipped() -> None:
         return client.processed
 
     assert asyncio.run(_run()) == []
+
+
+def test_segment_delay_seconds_matches_rule() -> None:
+    client = OneBotWSClient(_StubWindowManager())
+
+    assert client._segment_delay_seconds("你好呀") == 0.6
+    assert client._segment_delay_seconds("12345") == 1.0
+    assert client._segment_delay_seconds("a" * 100) == 5.0
+
+
+def test_send_reply_segments_waits_between_segments() -> None:
+    async def _run() -> tuple[list[str], list[float]]:
+        client = OneBotWSClient(_StubWindowManager())
+        ws = _StubWS()
+        delays: list[float] = []
+        original_sleep = asyncio.sleep
+
+        async def _fake_sleep(delay: float) -> None:
+            delays.append(delay)
+
+        asyncio.sleep = _fake_sleep
+        try:
+            await client._send_reply_segments(ws, user_id=1, reply="你好呀\n\n今天怎么样")
+        finally:
+            asyncio.sleep = original_sleep
+        return ws.sent_payloads, delays
+
+    sent_payloads, delays = asyncio.run(_run())
+
+    assert len(sent_payloads) == 2
+    assert delays == [0.6]

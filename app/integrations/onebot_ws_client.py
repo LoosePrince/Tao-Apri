@@ -105,11 +105,18 @@ class OneBotWSClient:
                 parts.append(block)
         return parts or [text]
 
+    @staticmethod
+    def _segment_delay_seconds(segment: str) -> float:
+        char_count = max(0, len(segment.strip()))
+        if char_count <= 0:
+            return 0.0
+        return min(5.0, char_count / 5.0)
+
     async def _send_reply_segments(self, ws: websockets.ClientConnection, *, user_id: int, reply: str) -> None:
         segments = self._split_reply_segments(reply)
         if not segments:
             return
-        for segment in segments:
+        for index, segment in enumerate(segments):
             action_payload = {
                 "action": "send_private_msg",
                 "params": {
@@ -121,6 +128,18 @@ class OneBotWSClient:
             async with self._send_lock:
                 await ws.send(json.dumps(action_payload, ensure_ascii=False))
             logger.info("OneBot reply segment sent | user_id=%s | len=%s", user_id, len(segment))
+            if index >= len(segments) - 1:
+                continue
+            delay_seconds = self._segment_delay_seconds(segment)
+            if delay_seconds <= 0:
+                continue
+            logger.debug(
+                "OneBot segment delay | user_id=%s | len=%s | delay=%.2fs",
+                user_id,
+                len(segment),
+                delay_seconds,
+            )
+            await asyncio.sleep(delay_seconds)
 
     async def _process_message(
         self,
