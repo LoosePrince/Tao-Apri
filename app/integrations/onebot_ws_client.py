@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
@@ -147,11 +149,13 @@ class OneBotWSClient:
         *,
         user_id: int,
         user_text: str,
+        nickname: str | None = None,
     ) -> None:
         result = await asyncio.to_thread(
             self.window_manager.process_user_message,
             user_id=str(user_id),
             user_message=user_text,
+            nickname=nickname,
         )
         logger.info(
             "OneBot message processed | user_id=%s | session_id=%s | session_emotion=%.3f | global_emotion=%.3f",
@@ -234,6 +238,13 @@ class OneBotWSClient:
             return
         logger.info("OneBot received private message | user_id=%s | text=%s", user_id, user_text)
         logger.debug("OneBot full event payload: %s", event)
-        task = asyncio.create_task(self._process_message(ws, user_id=user_id, user_text=user_text))
+        sender_nickname: str | None = None
+        if isinstance(sender, dict):
+            raw_nick = sender.get("card") or sender.get("nickname") or sender.get("remark") or ""
+            sender_nickname = str(raw_nick).strip() or None
+
+        task = asyncio.create_task(
+            self._process_message(ws, user_id=user_id, user_text=user_text, nickname=sender_nickname)
+        )
         self._inflight_tasks.add(task)
         task.add_done_callback(self._on_inflight_done)

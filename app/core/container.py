@@ -98,10 +98,11 @@ class Container:
             metrics=self.metrics,
         )
         self.window_manager = ConversationWindowManager(
-            batch_executor=lambda user_id, batch, abort: self.chat_orchestrator.handle_window_batch(
+            batch_executor=lambda user_id, batch, abort, nickname: self.chat_orchestrator.handle_window_batch(
                 user_id=user_id,
                 user_messages=batch,
                 abort_requested=abort,
+                nickname=nickname,
             ),
             metrics=self.metrics,
         )

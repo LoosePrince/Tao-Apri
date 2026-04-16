@@ -13,8 +13,8 @@ def test_termination_keyword_triggers_new_round() -> None:
     settings.rhythm.terminate_keywords = ["算了"]
     calls: list[list[str]] = []
 
-    def _executor(user_id: str, batch: list[str], abort_requested: bool) -> ChatResult:
-        del user_id, abort_requested
+    def _executor(user_id: str, batch: list[str], abort_requested: bool, nickname: str | None) -> ChatResult:
+        del user_id, abort_requested, nickname
         calls.append(batch)
         return ChatResult(session_id="s1", reply="ok", session_emotion=0.1, global_emotion=0.2)
 

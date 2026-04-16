@@ -280,9 +280,16 @@ class ChatOrchestrator:
         }
 
     def handle_message(self, *, user_id: str, user_message: str) -> ChatResult:
-        return self.handle_window_batch(user_id=user_id, user_messages=[user_message], abort_requested=False)
+        return self.handle_window_batch(
+            user_id=user_id,
+            user_messages=[user_message],
+            abort_requested=False,
+            nickname=None,
+        )
 
-    def handle_window_batch(self, *, user_id: str, user_messages: list[str], abort_requested: bool) -> ChatResult:
+    def handle_window_batch(
+        self, *, user_id: str, user_messages: list[str], abort_requested: bool, nickname: str | None = None
+    ) -> ChatResult:
         raw_user_message = "\n".join(msg.strip() for msg in user_messages if msg.strip())
         preprocessed = self.window_preprocessor.preprocess(user_messages)
         user_message = preprocessed.merged_user_message or raw_user_message
@@ -295,7 +302,7 @@ class ChatOrchestrator:
         logger.info("Chat handling started | user_id=%s", user_id)
         logger.debug("Incoming user message | user_id=%s | text=%s", user_id, user_message)
         now = now_local()
-        _, session = self.identity_service.ensure_user_and_session(user_id)
+        _, session = self.identity_service.ensure_user_and_session(user_id, nickname=nickname)
         logger.debug(
             "Session ensured | user_id=%s | session_id=%s | turn_count=%s",
             user_id,

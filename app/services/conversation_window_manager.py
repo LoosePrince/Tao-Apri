@@ -25,6 +25,7 @@ class WindowState:
     mode: str = "LISTENING"
     q1: list[str] = field(default_factory=list)
     q2: list[str] = field(default_factory=list)
+    last_nickname: str | None = None
     silence_deadline: float | None = None
     cooldown_until: float = 0.0
     active_round: int = 0
@@ -38,7 +39,7 @@ class ConversationWindowManager:
     def __init__(
         self,
         *,
-        batch_executor: Callable[[str, list[str], bool], ChatResult],
+        batch_executor: Callable[[str, list[str], bool, str | None], ChatResult],
         metrics: MetricsRegistry,
     ) -> None:
         self.batch_executor = batch_executor
@@ -61,10 +62,12 @@ class ConversationWindowManager:
         self._thread.join(timeout=2.0)
         self._thread = None
 
-    def process_user_message(self, *, user_id: str, user_message: str) -> ChatResult:
+    def process_user_message(
+        self, *, user_id: str, user_message: str, nickname: str | None = None
+    ) -> ChatResult:
         started = time.monotonic()
         try:
-            result = self._enqueue_and_wait(user_id=user_id, user_message=user_message)
+            result = self._enqueue_and_wait(user_id=user_id, user_message=user_message, nickname=nickname)
             self.metrics.observe_request(latency_ms=(time.monotonic() - started) * 1000.0, is_error=False)
             return result
         except Exception:
@@ -77,10 +80,14 @@ class ConversationWindowManager:
             self._states[user_id] = WindowState()
         return self._states[user_id]
 
-    def _enqueue_and_wait(self, *, user_id: str, user_message: str) -> ChatResult:
+    def _enqueue_and_wait(self, *, user_id: str, user_message: str, nickname: str | None) -> ChatResult:
         state = self._state_for(user_id)
         now = time.monotonic()
         with state.lock:
+            if nickname:
+                nick = nickname.strip()
+                if nick:
+                    state.last_nickname = nick
             is_terminate = (
                 settings.rhythm.enable_terminate_keywords
                 and any(token in user_message for token in settings.rhythm.terminate_keywords)
@@ -147,6 +154,7 @@ class ConversationWindowManager:
         with state.lock:
             state.mode = "RESPONDING"
             abort_requested = state.abort_requested
+            nickname_for_batch = state.last_nickname
 
         def _fallback_timeout_result() -> ChatResult:
             return ChatResult(
@@ -163,7 +171,7 @@ class ConversationWindowManager:
 
                 def _execute() -> None:
                     try:
-                        holder["result"] = self.batch_executor(user_id, batch, abort_requested)
+                        holder["result"] = self.batch_executor(user_id, batch, abort_requested, nickname_for_batch)
                     except Exception as exc:  # pragma: no cover
                         holder["result"] = exc
                     finally:
@@ -185,7 +193,7 @@ class ConversationWindowManager:
                         raise RuntimeError("Batch executor returned invalid result")
                     result = maybe_result
             else:
-                result = self.batch_executor(user_id, batch, abort_requested)
+                result = self.batch_executor(user_id, batch, abort_requested, nickname_for_batch)
         except Exception as exc:
             with state.lock:
                 for waiter in state.waiters:

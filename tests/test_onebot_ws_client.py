@@ -4,8 +4,8 @@ from app.integrations.onebot_ws_client import OneBotWSClient
 
 
 class _StubWindowManager:
-    def process_user_message(self, *, user_id: str, user_message: str):
-        del user_id, user_message
+    def process_user_message(self, *, user_id: str, user_message: str, nickname: str | None = None):
+        del user_id, user_message, nickname
         return None
 
 
@@ -23,7 +23,14 @@ class _InspectableOneBotClient(OneBotWSClient):
         super().__init__(_StubWindowManager())
         self.processed: list[tuple[int, str]] = []
 
-    async def _process_message(self, ws, *, user_id: int, user_text: str) -> None:  # type: ignore[override]
+    async def _process_message(  # type: ignore[override]
+        self,
+        ws,
+        *,
+        user_id: int,
+        user_text: str,
+        nickname: str | None = None,
+    ) -> None:
         del ws
         self.processed.append((user_id, user_text))
 

@@ -11,8 +11,13 @@ class IdentityService:
         self.user_repo = user_repo
         self.session_repo = session_repo
 
-    def ensure_user_and_session(self, user_id: str) -> tuple[User, Session]:
+    def ensure_user_and_session(self, user_id: str, *, nickname: str | None = None) -> tuple[User, Session]:
         user = self.user_repo.get(user_id) or User(user_id=user_id)
+        if nickname:
+            nick = nickname.strip()
+            # 仅在上游提供非空 nickname 时更新，避免无信息覆盖已有昵称。
+            if nick and (not user.nickname or user.nickname != nick):
+                user.nickname = nick
         user = self.user_repo.upsert(user)
 
         session = self.session_repo.get_by_user_id(user_id)
