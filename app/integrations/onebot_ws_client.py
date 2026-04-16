@@ -276,7 +276,16 @@ class OneBotWSClient:
             logger.info("Skip duplicate message | user_id=%s | message_id=%s", user_id, message_id)
             return
         if message_type == "group":
-            allow_autonomous = group_id in set(settings.onebot.group_autonomous_whitelist or [])
+            whitelist = set(settings.onebot.group_autonomous_whitelist or [])
+            in_whitelist = group_id in whitelist
+            if settings.onebot.force_group_whitelist and not in_whitelist:
+                logger.debug(
+                    "Skip group message (force whitelist) | group_id=%s | user_id=%s",
+                    group_id,
+                    user_id,
+                )
+                return
+            allow_autonomous = in_whitelist
             mentioned = _is_mentioned_in_array_message(message_payload, self_id=self_id)
             if not allow_autonomous and not mentioned:
                 logger.debug(

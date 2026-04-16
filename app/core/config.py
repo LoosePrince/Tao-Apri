@@ -97,6 +97,7 @@ class OneBotConfig(BaseModel):
     message_format: str = "array"
     reconnect_interval_seconds: float = Field(default=3.0, ge=0.5, le=60.0)
     debug_only_user_id: int = 1377820366
+    force_group_whitelist: bool = False
     group_autonomous_whitelist: list[int] = Field(default_factory=list)
 
 
