@@ -39,6 +39,12 @@ def setup_logging() -> None:
     root_logger.addHandler(info_file_handler)
     root_logger.addHandler(debug_file_handler)
 
+    # 把 uvicorn 的访问日志从控制台挪到 debug_file，避免管理接口频繁刷屏。
+    access_logger = logging.getLogger("uvicorn.access")
+    access_logger.setLevel(logging.DEBUG)
+    access_logger.propagate = False
+    access_logger.addHandler(debug_file_handler)
+
     logging.getLogger(__name__).info(
         "Logging initialized | info_file=%s | debug_file=%s",
         info_file.as_posix(),

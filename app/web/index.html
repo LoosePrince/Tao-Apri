@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>配置控制台</title>
+    <link rel="stylesheet" href="/admin/static/styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+    <script>
+      (function () {
+        function sync() {
+          var dark = false;
+          try {
+            var el = window.parent && window.parent.document && window.parent.document.documentElement;
+            if (el) {
+              if (el.classList && el.classList.contains("dark")) dark = true;
+              else if (el.getAttribute && el.getAttribute("data-theme") === "dark") dark = true;
+              else if (el.getAttribute && el.getAttribute("data-mui-color-scheme") === "dark") dark = true;
+            }
+          } catch (e) {}
+          if (!dark && window.matchMedia("(prefers-color-scheme:dark)").matches) dark = true;
+          document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+        }
+        sync();
+        try {
+          window.matchMedia("(prefers-color-scheme:dark)").addEventListener("change", sync);
+        } catch (e) {
+          try {
+            window.matchMedia("(prefers-color-scheme:dark)").addListener(sync);
+          } catch (e2) {}
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <h1>配置控制台</h1>
+    <p class="lead">
+      在运行时读取/校验/应用配置。敏感项不会默认回填到前端，只在点击“应用”时作为增量更新提交。
+    </p>
+
+    <div class="toolbar">
+      <button id="btn-load">↻ 刷新配置</button>
+      <button id="btn-validate">✓ 校验</button>
+      <button id="btn-apply" class="primary">⟳ 应用</button>
+      <button id="btn-export">⬇ 导出 .env</button>
+      <div id="status-bar">—</div>
+    </div>
+
+    <div class="info-row" id="info-row" style="display: none">
+      <span id="bv" class="badge"></span>
+      <span id="bc" class="badge"></span>
+      <span id="bc2" class="badge ok"></span>
+    </div>
+
+    <div id="form-root">
+      <p class="muted">正在加载配置…</p>
+    </div>
+
+    <div id="auth-root" style="display:none">
+      <div class="auth-box">
+        <div class="muted">
+          需要 QQ 扫码登录（允许账号：<code id="allowed-uin"></code>）
+        </div>
+        <div id="qr-container" style="width: 200px; height: 200px; display: flex; align-items: center; justify-content: center; margin-top: 0.75rem;"></div>
+        <div id="auth-msg" class="muted">等待扫码…</div>
+        <button id="btn-refresh-qr">换一张</button>
+      </div>
+    </div>
+
+    <div id="toast"></div>
+
+    <script src="/admin/static/app.js"></script>
+  </body>
+</html>
+

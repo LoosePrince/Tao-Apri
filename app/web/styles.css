@@ -1,0 +1,385 @@
+/* 视觉风格对齐 PF-GUGUBot 的 gugubot_webui.html（同一套 CSS 变量与组件范式） */
+:root {
+  color-scheme: light dark;
+  --bg: #ffffff;
+  --bg-muted: #f8fafc;
+  --bg-card: #f1f5f9;
+  --text: #0f172a;
+  --text-muted: #64748b;
+  --border: #e2e8f0;
+  --primary: #2563eb;
+  --primary-h: #1d4ed8;
+  --danger: #dc2626;
+  --success: #16a34a;
+  --input-bg: #ffffff;
+  --input-bd: #cbd5e1;
+  --toggle-off: #cbd5e1;
+  --toggle-on: #2563eb;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 14px;
+  color: var(--text);
+  line-height: 1.55;
+  background: var(--bg);
+}
+
+html[data-theme="dark"] {
+  --bg: #0f1419;
+  --bg-muted: #161b22;
+  --bg-card: #21262d;
+  --text: #e6edf3;
+  --text-muted: #8b949e;
+  --border: #30363d;
+  --primary: #388bfd;
+  --primary-h: #58a6ff;
+  --danger: #f85149;
+  --success: #3fb950;
+  --input-bg: #161b22;
+  --input-bd: #30363d;
+  --toggle-off: #30363d;
+  --toggle-on: #388bfd;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 1rem 1.25rem 3rem;
+  max-width: 900px;
+}
+
+h1 {
+  font-size: 1.2rem;
+  margin: 0 0 0.4rem;
+  font-weight: 700;
+}
+
+.lead {
+  color: var(--text-muted);
+  font-size: 0.875rem;
+  margin: 0 0 0.9rem;
+}
+
+/* Toolbar */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.65rem;
+  border-bottom: 1px solid var(--border);
+}
+
+#status-bar {
+  flex: 1;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* Buttons */
+button {
+  padding: 0.38rem 0.75rem;
+  cursor: pointer;
+  border-radius: 6px;
+  border: 1px solid var(--input-bd);
+  background: var(--bg-card);
+  color: var(--text);
+  font-size: 0.83rem;
+}
+
+button:hover {
+  background: var(--border);
+}
+
+button.primary {
+  background: var(--primary);
+  color: #fff;
+  border-color: var(--primary);
+}
+
+button.primary:hover {
+  background: var(--primary-h);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Info badges */
+.info-row {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.65rem;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.1rem 0.45rem;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  font-size: 0.76rem;
+  color: var(--text-muted);
+}
+
+.badge.ok {
+  border-color: var(--success);
+  color: var(--success);
+}
+
+/* Sections */
+details {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 0.6rem;
+  background: var(--bg-muted);
+}
+
+details > summary {
+  padding: 0.6rem 0.85rem;
+  font-weight: 600;
+  font-size: 0.92rem;
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  user-select: none;
+}
+
+details > summary::before {
+  content: "▶";
+  font-size: 0.6rem;
+  color: var(--text-muted);
+  transition: transform 0.15s;
+}
+
+details[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.sec-body {
+  padding: 0.4rem 0.85rem 0.85rem;
+}
+
+details.sub {
+  margin: 0.35rem 0;
+  background: var(--bg);
+}
+
+details.sub > summary {
+  font-size: 0.88rem;
+  font-weight: 500;
+  padding: 0.45rem 0.7rem;
+}
+
+details.sub > .sec-body {
+  padding: 0.2rem 0.7rem 0.7rem;
+}
+
+/* Fields grid */
+.fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.55rem 1rem;
+}
+
+@media (max-width: 580px) {
+  .fields {
+    grid-template-columns: 1fr;
+  }
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.field.full {
+  grid-column: 1/-1;
+}
+
+.flabel {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.fdesc {
+  font-size: 0.73rem;
+  color: var(--text-muted);
+}
+
+/* Inputs */
+input[type="text"],
+input[type="number"],
+input[type="password"],
+textarea,
+select {
+  width: 100%;
+  padding: 0.32rem 0.45rem;
+  border: 1px solid var(--input-bd);
+  border-radius: 5px;
+  background: var(--input-bg);
+  color: var(--text);
+  font-size: 0.83rem;
+  font-family: inherit;
+}
+
+input:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+textarea {
+  resize: vertical;
+  min-height: 60px;
+  font-family: monospace;
+}
+
+input[type="number"] {
+  max-width: 130px;
+}
+
+/* Toggle */
+.twrap {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.15rem;
+}
+
+.toggle {
+  position: relative;
+  display: inline-block;
+  width: 38px;
+  height: 21px;
+  flex-shrink: 0;
+}
+
+.toggle input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.slider {
+  position: absolute;
+  cursor: pointer;
+  inset: 0;
+  background: var(--toggle-off);
+  border-radius: 21px;
+  transition: 0.18s;
+}
+
+.slider::before {
+  content: "";
+  position: absolute;
+  height: 15px;
+  width: 15px;
+  left: 3px;
+  top: 3px;
+  background: #fff;
+  border-radius: 50%;
+  transition: 0.18s;
+}
+
+.toggle input:checked + .slider {
+  background: var(--toggle-on);
+}
+
+.toggle input:checked + .slider::before {
+  transform: translateX(17px);
+}
+
+.tlabel {
+  font-size: 0.82rem;
+}
+
+/* Toast */
+#toast {
+  position: fixed;
+  bottom: 1.2rem;
+  right: 1.2rem;
+  padding: 0.55rem 0.9rem;
+  border-radius: 7px;
+  font-size: 0.83rem;
+  font-weight: 500;
+  background: var(--success);
+  color: #fff;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2);
+  transform: translateY(70px);
+  opacity: 0;
+  transition: transform 0.22s, opacity 0.22s;
+  z-index: 9999;
+  pointer-events: none;
+}
+
+#toast.show {
+  transform: translateY(0);
+  opacity: 1;
+}
+
+#toast.err {
+  background: var(--danger);
+}
+
+.muted {
+  color: var(--text-muted);
+  font-size: 0.83rem;
+}
+
+code {
+  font-size: 0.82em;
+  background: var(--bg-card);
+  padding: 0.1em 0.3em;
+  border-radius: 3px;
+}
+
+/* Auth (QQ QR login) */
+#auth-root {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-muted);
+  padding: 0.85rem;
+  width: 100%;
+  justify-content: center;
+  align-items: center;
+  min-height: 60vh;
+}
+
+#auth-root .auth-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+#qr-container {
+  width: 200px;
+  height: 200px;
+  margin: 0.75rem auto 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+

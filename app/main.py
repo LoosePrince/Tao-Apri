@@ -1,18 +1,23 @@
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import logging
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.api.routes.chat import router as chat_router
 from app.api.routes.health import router as health_router
+from app.api.routes.admin import router as admin_router
+from app.api.routes.admin_auth import router as admin_auth_router
 from app.api.routes.llm import router as llm_router
 from app.api.routes.session import router as session_router
 from app.core.container import container
 from app.core.clock import now_local_with_source
 from app.core.config import settings
 from app.core.logging import setup_logging
-from app.integrations.onebot_ws_client import OneBotWSClient
+from app.core.onebot_service import OneBotService
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -56,7 +61,7 @@ def _log_startup_diagnostics() -> None:
 
 
 @asynccontextmanager
-async def lifespan(_: FastAPI):
+async def lifespan(app: FastAPI):
     _log_startup_diagnostics()
     container.task_queue.start()
     container.periodic_scheduler.start()
@@ -65,12 +70,13 @@ async def lifespan(_: FastAPI):
         ok = container.llm_client.startup_health_check()
         if not ok:
             logger.error("LLM startup health check failed, service continues in degraded mode.")
-    onebot_client = OneBotWSClient(container.window_manager)
-    await onebot_client.start()
+    onebot_service = OneBotService()
+    app.state.onebot_service = onebot_service
+    await onebot_service.start(window_manager=container.window_manager)
     try:
         yield
     finally:
-        await onebot_client.stop()
+        await onebot_service.stop()
         container.window_manager.stop()
         container.periodic_scheduler.stop()
         container.task_queue.stop()
@@ -81,3 +87,14 @@ app.include_router(health_router)
 app.include_router(session_router, prefix="/session", tags=["session"])
 app.include_router(chat_router, prefix="/chat", tags=["chat"])
 app.include_router(llm_router, prefix="/llm", tags=["llm"])
+app.include_router(admin_router)
+app.include_router(admin_auth_router)
+
+# Web console (admin UI) - serves under /admin
+web_dir = Path(__file__).parent / "web"
+if web_dir.exists():
+    app.mount("/admin/static", StaticFiles(directory=web_dir), name="admin-static")
+
+    @app.get("/admin", include_in_schema=False)
+    def admin_console_page() -> FileResponse:
+        return FileResponse(web_dir / "index.html")
