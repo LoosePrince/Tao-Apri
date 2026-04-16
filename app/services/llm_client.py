@@ -2,6 +2,7 @@ import logging
 import time
 import json
 import re
+import threading
 from dataclasses import dataclass
 
 from openai import OpenAI
@@ -45,28 +46,67 @@ class LLMClient:
         self._client: OpenAI | None = None
         self._consecutive_failures = 0
         self._circuit_open_until = 0.0
+        self._circuit_lock = threading.RLock()
 
     @staticmethod
     def _render_template(template: str, values: dict[str, object]) -> str:
-        return template.format(**values)
+        # Use a safe placeholder renderer:
+        # - Replace only "{identifier}" placeholders.
+        # - Leave JSON examples like {"should_reply": true|false} intact (do NOT treat them as placeholders).
+        def _replace(match: re.Match[str]) -> str:
+            key = match.group(1)
+            if key in values:
+                return str(values[key])
+            return match.group(0)
+
+        return re.sub(r"\{([a-zA-Z_]\w*)\}", _replace, template)
 
     @staticmethod
     def _extract_json(raw: str) -> dict[str, object]:
         stripped = (raw or "").strip()
         if not stripped:
             return {}
+        # First, try full-string parse (decider is expected to output JSON only).
         try:
             parsed = json.loads(stripped)
             return parsed if isinstance(parsed, dict) else {}
         except json.JSONDecodeError:
-            match = re.search(r"\{.*\}", stripped, flags=re.S)
-            if not match:
-                return {}
-            try:
-                parsed = json.loads(match.group(0))
-                return parsed if isinstance(parsed, dict) else {}
-            except json.JSONDecodeError:
-                return {}
+            pass
+
+        # Fallback: find the first balanced JSON object.
+        # This avoids the previous greedy `{.*}` extraction that could swallow multiple objects.
+        start_idx = stripped.find("{")
+        while start_idx != -1:
+            depth = 0
+            in_string = False
+            escape = False
+            for i in range(start_idx, len(stripped)):
+                ch = stripped[i]
+                if escape:
+                    escape = False
+                    continue
+                if ch == "\\":
+                    escape = True
+                    continue
+                if ch == '"':
+                    in_string = not in_string
+                    continue
+                if in_string:
+                    continue
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        candidate = stripped[start_idx : i + 1]
+                        try:
+                            parsed = json.loads(candidate)
+                            return parsed if isinstance(parsed, dict) else {}
+                        except json.JSONDecodeError:
+                            break
+            start_idx = stripped.find("{", start_idx + 1)
+
+        return {}
 
     def _call_json_decider(self, *, system_asset: str, user_asset: str, values: dict[str, object]) -> dict[str, object]:
         provider = settings.llm.provider.lower().strip()
@@ -202,8 +242,21 @@ class LLMClient:
             },
         )
 
+        def _coerce_bool(value: object) -> bool:
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, str):
+                normalized = value.strip().lower()
+                if normalized in {"true", "1", "yes", "y", "on"}:
+                    return True
+                if normalized in {"false", "0", "no", "n", "off"}:
+                    return False
+            # 保底：倾向回复（不沉默）
+            return True
+
         raw_should_reply = data.get("should_reply", True) if isinstance(data, dict) else True
-        should_reply = raw_should_reply if isinstance(raw_should_reply, bool) else True
+        should_reply = _coerce_bool(raw_should_reply)
+
         reason = str(data.get("reason", "")).strip() if isinstance(data, dict) else ""
         if not reason:
             reason = "fallback:default_true"
@@ -412,8 +465,19 @@ class LLMClient:
         max_attempts = settings.llm.retry_max_attempts
         backoff = settings.llm.retry_backoff_seconds
         last_exc: Exception | None = None
+        # Hard time budget to avoid blocking longer than the conversation-window wait timeout.
+        # Note: /chat waits for `silence_seconds` before calling the batch executor, so we must
+        # budget less than `wait_timeout_seconds` starting from here.
+        budget_seconds = settings.rhythm.wait_timeout_seconds - settings.rhythm.silence_seconds - settings.rhythm.cooldown_seconds - 1.0
+        deadline = time.monotonic() + max(1.0, budget_seconds)
 
         for attempt in range(1, max_attempts + 1):
+            # If there's not enough remaining time for a full attempt, stop early.
+            time_left = deadline - time.monotonic()
+            if time_left <= 0:
+                break
+            if time_left < settings.llm.timeout_seconds:
+                break
             try:
                 response = client.chat.completions.create(
                     model=settings.llm.model,
@@ -434,7 +498,9 @@ class LLMClient:
                 if attempt < max_attempts and not self._is_circuit_open():
                     sleep_seconds = backoff * attempt
                     if sleep_seconds > 0:
-                        time.sleep(sleep_seconds)
+                        remaining = deadline - time.monotonic()
+                        if remaining > 0:
+                            time.sleep(min(sleep_seconds, remaining))
                 else:
                     break
 
@@ -452,21 +518,24 @@ class LLMClient:
         return self._client
 
     def _is_circuit_open(self) -> bool:
-        return time.monotonic() < self._circuit_open_until
+        with self._circuit_lock:
+            return time.monotonic() < self._circuit_open_until
 
     def _on_request_success(self) -> None:
-        self._consecutive_failures = 0
-        self._circuit_open_until = 0.0
+        with self._circuit_lock:
+            self._consecutive_failures = 0
+            self._circuit_open_until = 0.0
 
     def _on_request_failure(self, exc: Exception) -> None:
-        self._consecutive_failures += 1
-        threshold = settings.llm.circuit_breaker_failure_threshold
-        if self._consecutive_failures >= threshold:
-            open_seconds = settings.llm.circuit_breaker_open_seconds
-            self._circuit_open_until = time.monotonic() + open_seconds
-            logger.error(
-                "Circuit breaker opened | failures=%s | open_seconds=%s | reason=%s",
-                self._consecutive_failures,
-                open_seconds,
-                exc,
-            )
+        with self._circuit_lock:
+            self._consecutive_failures += 1
+            threshold = settings.llm.circuit_breaker_failure_threshold
+            if self._consecutive_failures >= threshold:
+                open_seconds = settings.llm.circuit_breaker_open_seconds
+                self._circuit_open_until = time.monotonic() + open_seconds
+                logger.error(
+                    "Circuit breaker opened | failures=%s | open_seconds=%s | reason=%s",
+                    self._consecutive_failures,
+                    open_seconds,
+                    exc,
+                )

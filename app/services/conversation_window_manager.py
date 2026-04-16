@@ -32,6 +32,7 @@ class WindowState:
     completed_round: int = 0
     waiters: list[_Waiter] = field(default_factory=list)
     abort_requested: bool = False
+    batch_scheduled: bool = False
     lock: threading.RLock = field(default_factory=threading.RLock)
 
 
@@ -83,6 +84,7 @@ class ConversationWindowManager:
     def _enqueue_and_wait(self, *, user_id: str, user_message: str, nickname: str | None) -> ChatResult:
         state = self._state_for(user_id)
         now = time.monotonic()
+        delayed_trigger_deadline: float | None = None
         with state.lock:
             if nickname:
                 nick = nickname.strip()
@@ -108,12 +110,29 @@ class ConversationWindowManager:
             else:
                 state.q1.append(user_message)
                 target_round = state.completed_round + 1
-                state.silence_deadline = max(
+                # Hard limit so that: (silence delay) + (max_think_seconds) <= wait_timeout_seconds,
+                # otherwise the waiter may time out before the batch thread has a chance to set result.
+                base_deadline = max(
                     now + settings.rhythm.silence_seconds,
                     state.cooldown_until + settings.rhythm.silence_seconds,
                 )
+                hard_limit = now + max(
+                    0.0,
+                    settings.rhythm.wait_timeout_seconds - settings.rhythm.max_think_seconds - 0.5,
+                )
+                state.silence_deadline = min(base_deadline, hard_limit)
+                if not state.batch_scheduled:
+                    state.batch_scheduled = True
+                    delayed_trigger_deadline = state.silence_deadline
             waiter = _Waiter(target_round=target_round, event=threading.Event(), holder={"result": None})
             state.waiters.append(waiter)
+        if delayed_trigger_deadline is not None:
+            threading.Thread(
+                target=self._delayed_trigger,
+                args=(user_id, delayed_trigger_deadline),
+                name=f"window-delayed-trigger-{user_id}",
+                daemon=True,
+            ).start()
         if not waiter.event.wait(timeout=settings.rhythm.wait_timeout_seconds):
             raise TimeoutError(f"Conversation window timed out for user={user_id}")
         result = waiter.holder.get("result")
@@ -125,29 +144,91 @@ class ConversationWindowManager:
 
     def _loop(self) -> None:
         while not self._stop_event.is_set():
-            now = time.monotonic()
-            for user_id, state in list(self._states.items()):
-                with state.lock:
-                    if (
-                        state.mode == "LISTENING"
-                        and state.q1
-                        and state.silence_deadline is not None
-                        and now >= state.silence_deadline
-                        and now >= state.cooldown_until
-                    ):
-                        batch = list(state.q1)
-                        state.q1.clear()
-                        state.mode = "LOCKED"
-                        state.active_round = state.completed_round + 1
-                        state.silence_deadline = None
-                        self.metrics.inc("lock_trigger_count")
-                        threading.Thread(
-                            target=self._run_batch,
-                            args=(user_id, batch, state.active_round),
-                            name=f"window-batch-{user_id}",
-                            daemon=True,
-                        ).start()
+            try:
+                now = time.monotonic()
+                for user_id, state in list(self._states.items()):
+                    try:
+                        with state.lock:
+                            if (
+                                state.mode == "LISTENING"
+                                and state.q1
+                                and state.silence_deadline is not None
+                                and now >= state.silence_deadline
+                                and now >= state.cooldown_until
+                            ):
+                                batch = list(state.q1)
+                                state.q1.clear()
+                                state.mode = "LOCKED"
+                                state.active_round = state.completed_round + 1
+                                state.silence_deadline = None
+                                state.batch_scheduled = False
+                                self.metrics.inc("lock_trigger_count")
+                                threading.Thread(
+                                    target=self._run_batch,
+                                    args=(user_id, batch, state.active_round),
+                                    name=f"window-batch-{user_id}",
+                                    daemon=True,
+                                ).start()
+                    except Exception:
+                        logger.exception("ConversationWindowManager loop error | user_id=%s", user_id)
+            except Exception:
+                logger.exception("ConversationWindowManager loop fatal error")
             time.sleep(0.05)
+
+    def _delayed_trigger(self, user_id: str, scheduled_deadline: float) -> None:
+        """
+        Fallback scheduler: trigger a batch when _loop() is unavailable.
+        """
+        # Wait until the scheduled deadline (or stop).
+        while not self._stop_event.is_set():
+            now = time.monotonic()
+            with self._state_for(user_id).lock:
+                state = self._state_for(user_id)
+                if state.mode != "LISTENING" or not state.q1 or state.silence_deadline is None:
+                    state.batch_scheduled = False
+                    return
+                # If deadline changed (new message or state update), stop and let next enqueue schedule.
+                if state.silence_deadline != scheduled_deadline:
+                    state.batch_scheduled = False
+                    return
+            remaining = scheduled_deadline - now
+            if remaining <= 0:
+                break
+            time.sleep(min(0.2, remaining))
+
+        if self._stop_event.is_set():
+            with self._state_for(user_id).lock:
+                self._state_for(user_id).batch_scheduled = False
+            return
+
+        now = time.monotonic()
+        state = self._state_for(user_id)
+        with state.lock:
+            if (
+                state.mode != "LISTENING"
+                or not state.q1
+                or state.silence_deadline is None
+                or state.silence_deadline != scheduled_deadline
+                or now < state.silence_deadline
+                or now < state.cooldown_until
+            ):
+                state.batch_scheduled = False
+                return
+
+            batch = list(state.q1)
+            state.q1.clear()
+            state.mode = "LOCKED"
+            state.active_round = state.completed_round + 1
+            state.silence_deadline = None
+            state.batch_scheduled = False
+            self.metrics.inc("lock_trigger_count")
+
+        threading.Thread(
+            target=self._run_batch,
+            args=(user_id, batch, state.active_round),
+            name=f"window-batch-{user_id}",
+            daemon=True,
+        ).start()
 
     def _run_batch(self, user_id: str, batch: list[str], round_id: int) -> None:
         state = self._state_for(user_id)
@@ -165,41 +246,55 @@ class ConversationWindowManager:
             )
 
         try:
-            if settings.rhythm.enable_max_think_seconds:
-                holder: dict[str, ChatResult | Exception | None] = {"result": None}
-                finished = threading.Event()
+            # Always execute batch in a background thread to avoid blocking longer than
+            # `process_user_message`'s `wait_timeout_seconds` when downstream (LLM/IO) is slow.
+            # We still respect `max_think_seconds` as the hard upper bound for producing a result.
+            holder: dict[str, ChatResult | Exception | None] = {"result": None}
+            finished = threading.Event()
 
-                def _execute() -> None:
-                    try:
-                        holder["result"] = self.batch_executor(user_id, batch, abort_requested, nickname_for_batch)
-                    except Exception as exc:  # pragma: no cover
-                        holder["result"] = exc
-                    finally:
-                        finished.set()
+            def _execute() -> None:
+                try:
+                    holder["result"] = self.batch_executor(user_id, batch, abort_requested, nickname_for_batch)
+                except Exception as exc:  # pragma: no cover
+                    holder["result"] = exc
+                finally:
+                    finished.set()
 
-                threading.Thread(
-                    target=_execute,
-                    name=f"window-batch-exec-{user_id}-{round_id}",
-                    daemon=True,
-                ).start()
-                if not finished.wait(timeout=settings.rhythm.max_think_seconds):
-                    self.metrics.inc("max_think_timeout_count")
-                    result = _fallback_timeout_result()
-                else:
-                    maybe_result = holder["result"]
-                    if isinstance(maybe_result, Exception):
-                        raise maybe_result
-                    if not isinstance(maybe_result, ChatResult):
-                        raise RuntimeError("Batch executor returned invalid result")
-                    result = maybe_result
+            threading.Thread(
+                target=_execute,
+                name=f"window-batch-exec-{user_id}-{round_id}",
+                daemon=True,
+            ).start()
+
+            if not finished.wait(timeout=settings.rhythm.max_think_seconds):
+                self.metrics.inc("max_think_timeout_count")
+                result = _fallback_timeout_result()
             else:
-                result = self.batch_executor(user_id, batch, abort_requested, nickname_for_batch)
+                maybe_result = holder["result"]
+                if isinstance(maybe_result, Exception):
+                    raise maybe_result
+                if not isinstance(maybe_result, ChatResult):
+                    raise RuntimeError("Batch executor returned invalid result")
+                result = maybe_result
         except Exception as exc:
             with state.lock:
                 for waiter in state.waiters:
                     if waiter.target_round == round_id:
                         waiter.holder["result"] = exc
                         waiter.event.set()
+                # Ensure window can recover and accept new batches after failures.
+                state.waiters = [w for w in state.waiters if not w.event.is_set()]
+                state.completed_round = round_id
+                state.mode = "HANDOVER"
+                state.q1 = list(state.q2)
+                state.q2.clear()
+                state.abort_requested = False
+                state.cooldown_until = time.monotonic() + settings.rhythm.cooldown_seconds
+                state.mode = "LISTENING"
+                if state.q1:
+                    state.silence_deadline = state.cooldown_until + settings.rhythm.silence_seconds
+                else:
+                    state.silence_deadline = None
             return
 
         with state.lock:

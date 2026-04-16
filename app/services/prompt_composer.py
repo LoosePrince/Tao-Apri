@@ -38,6 +38,27 @@ class PromptComposer:
         )
         return redacted
 
+    @staticmethod
+    def _classify_topic_from_text(text: str) -> str:
+        """
+        Lightweight deterministic topic classifier for cross-conversation memories.
+
+        Rationale: PromptComposer is used by unit tests without an LLM client dependency,
+        so topic classification must be deterministic and offline.
+        """
+        t = text
+        if any(k in t for k in ("学习", "考试", "复习", "作业", "论文", "备考")):
+            return "学习与考试"
+        if any(k in t for k in ("工作", "职业", "加班", "项目", "会议", "汇报", "同事", "岗位", "面试")):
+            return "工作与职业"
+        if any(k in t for k in ("睡", "作息", "健康", "锻炼", "运动", "早睡", "晚睡", "饮食", "感冒", "头痛")):
+            return "作息与健康"
+        if any(k in t for k in ("难过", "焦虑", "生气", "愤怒", "伤心", "烦", "绝望", "开心", "喜欢", "讨厌", "关系")):
+            return "情绪与关系"
+        if any(k in t for k in ("娱乐", "兴趣", "电影", "音乐", "游戏", "看剧", "旅游")):
+            return "娱乐与兴趣"
+        return "日常近况"
+
     def _build_memory_context(self, viewer_user_id: str, memories: list[Message]) -> str:
         self_header = read_required_markdown_asset("prompt/memory_self_header.md")
         self_item_template = read_required_markdown_asset("prompt/memory_self_item.md")
@@ -55,7 +76,7 @@ class PromptComposer:
                     )
                 continue
             if safe_text:
-                cross_topics.append("跨对话上下文片段")
+                cross_topics.append(self._classify_topic_from_text(safe_text))
 
         memory_lines: list[str] = []
         if self_lines:

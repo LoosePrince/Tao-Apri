@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 import logging
 import json
+import threading
 
 from app.core.clock import now_local
 from app.core.config import settings
@@ -63,6 +64,7 @@ class ChatOrchestrator:
         self.window_preprocessor = window_preprocessor
         self.metrics = metrics
         self._session_emotion: dict[str, float] = {}
+        self._session_emotion_lock = threading.RLock()
 
     def _retrieve_memories(self, user_id: str, query: str) -> list[Message]:
         return self.vector_repo.search(
@@ -310,10 +312,12 @@ class ChatOrchestrator:
             session.turn_count,
         )
 
-        last_session_emotion = self._session_emotion.get(session.session_id, 0.0)
+        with self._session_emotion_lock:
+            last_session_emotion = self._session_emotion.get(session.session_id, 0.0)
         message_score = self.emotion_engine.score_message(user_message)
         emotion_state = self.emotion_engine.update(last_session_emotion, message_score)
-        self._session_emotion[session.session_id] = emotion_state.session_emotion
+        with self._session_emotion_lock:
+            self._session_emotion[session.session_id] = emotion_state.session_emotion
         logger.info(
             "Emotion updated | user_id=%s | session_id=%s | message_score=%.3f | session_emotion=%.3f | global_emotion=%.3f",
             user_id,
@@ -559,12 +563,17 @@ class ChatOrchestrator:
         logger.info("LLM reply generated | user_id=%s | reply_len=%s", user_id, len(reply))
         logger.debug("LLM reply text | user_id=%s | reply=%s", user_id, reply)
 
-        if self.llm_client.is_unavailable_reply(reply):
+        is_unavailable_reply = getattr(self.llm_client, "is_unavailable_reply", None)
+        if callable(is_unavailable_reply) and is_unavailable_reply(reply):
             logger.warning(
                 "Chat failed, skip message persistence | user_id=%s | session_id=%s",
                 user_id,
                 session.session_id,
             )
+            # Even when LLM is unavailable, the conversation attempt should still advance
+            # the session turn counter (tests and client expectations rely on it).
+            session.turn_count += 1
+            self.identity_service.session_repo.upsert(session)
             return ChatResult(
                 session_id=session.session_id,
                 reply=reply,
