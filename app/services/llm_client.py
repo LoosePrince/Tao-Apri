@@ -34,6 +34,12 @@ class CrossAccessDecision:
     preference_denied: int
 
 
+@dataclass(slots=True)
+class ShouldReplyDecision:
+    should_reply: bool
+    reason: str = ""
+
+
 class LLMClient:
     def __init__(self) -> None:
         self._client: OpenAI | None = None
@@ -166,6 +172,43 @@ class LLMClient:
             similarity_denied=int(data.get("similarity_denied", 0) or 0),
             preference_denied=int(data.get("preference_denied", 0) or 0),
         )
+
+    def decide_should_reply(
+        self,
+        *,
+        user_message: str,
+        session_emotion: float,
+        global_emotion: float,
+        fatigue_level: float,
+        emotion_peak_level: float,
+        memory_count: int,
+        current_hour: int,
+        current_date: str,
+        current_year: int,
+    ) -> ShouldReplyDecision:
+        data = self._call_json_decider(
+            system_asset="prompt/ai_should_reply_system.md",
+            user_asset="prompt/ai_should_reply_user.md",
+            values={
+                "user_message": user_message,
+                "session_emotion": f"{session_emotion:.4f}",
+                "global_emotion": f"{global_emotion:.4f}",
+                "fatigue_level": f"{fatigue_level:.4f}",
+                "emotion_peak_level": f"{emotion_peak_level:.4f}",
+                "memory_count": str(memory_count),
+                "current_hour": str(current_hour),
+                "current_date": current_date,
+                "current_year": str(current_year),
+            },
+        )
+
+        raw_should_reply = data.get("should_reply", True) if isinstance(data, dict) else True
+        should_reply = raw_should_reply if isinstance(raw_should_reply, bool) else True
+        reason = str(data.get("reason", "")).strip() if isinstance(data, dict) else ""
+        if not reason:
+            reason = "fallback:default_true"
+
+        return ShouldReplyDecision(should_reply=should_reply, reason=reason)
 
     def extract_keywords(self, *, text: str, top_k: int = 5) -> list[str]:
         data = self._call_json_decider(

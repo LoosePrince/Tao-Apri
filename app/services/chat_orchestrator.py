@@ -454,6 +454,10 @@ class ChatOrchestrator:
             profile_summary = "\n".join(part for part in profile_parts if part)
         group_emotion_avg, group_emotion_text = self._build_group_emotion_context(viewer_user_id=user_id)
         profile_summary = (profile_summary + "\n" + group_emotion_text).strip() if profile_summary else group_emotion_text
+        # Decide policy inputs: prefer stored profile fatigue/emotion_peak when available,
+        # otherwise fall back to generated profile values.
+        fatigue_level_for_decider = profile.fatigue_level if profile else fatigue_level_generated
+        emotion_peak_level_for_decider = profile.emotion_peak_level if profile else emotion_peak_generated
         logger.debug(
             "Profile selected for prompt | user_id=%s | has_profile=%s | profile_len=%s",
             user_id,
@@ -490,6 +494,53 @@ class ChatOrchestrator:
             len(prompt_ctx.system_runtime),
             len(prompt_ctx.memory_context),
         )
+
+        should_reply_decider = getattr(self.llm_client, "decide_should_reply", None)
+        should_reply = True
+        skip_reason = ""
+        if callable(should_reply_decider):
+            decision = should_reply_decider(
+                user_message=user_message,
+                session_emotion=emotion_state.session_emotion,
+                global_emotion=emotion_state.global_emotion,
+                fatigue_level=fatigue_level_for_decider,
+                emotion_peak_level=emotion_peak_level_for_decider,
+                memory_count=len(memories),
+                current_hour=now.hour,
+                current_date=now.date().isoformat(),
+                current_year=now.year,
+            )
+            if isinstance(decision, dict):
+                should_reply = bool(decision.get("should_reply", True))
+                skip_reason = str(decision.get("reason", "")).strip()
+            else:
+                should_reply = bool(getattr(decision, "should_reply", True))
+                skip_reason = str(getattr(decision, "reason", "")).strip()
+
+        if not should_reply:
+            if not skip_reason:
+                skip_reason = "skip:should_reply=false"
+            self.metrics.inc("reply_skipped_count")
+            logger.info(
+                "Skip assistant reply by should_reply=false | user_id=%s | session_id=%s | reason=%s",
+                user_id,
+                session.session_id,
+                skip_reason,
+            )
+            self.memory_writer.write(
+                session_id=session.session_id,
+                user_id=user_id,
+                role="user",
+                content=user_message,
+                emotion_score=message_score,
+            )
+            logger.debug("User message persisted (reply skipped) | user_id=%s | session_id=%s", user_id, session.session_id)
+            return ChatResult(
+                session_id=session.session_id,
+                reply="",
+                session_emotion=emotion_state.session_emotion,
+                global_emotion=emotion_state.global_emotion,
+            )
 
         reply = self.llm_client.generate_reply(
             prompt_context=prompt_ctx,
