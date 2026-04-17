@@ -99,11 +99,12 @@ class Container:
             metrics=self.metrics,
         )
         self.window_manager = ConversationWindowManager(
-            batch_executor=lambda scope, batch, abort, nickname: self.chat_orchestrator.handle_window_batch(
+            batch_executor=lambda scope, batch, abort, nickname, group_hints: self.chat_orchestrator.handle_window_batch(
                 scope=scope,
                 user_messages=batch,
                 abort_requested=abort,
                 nickname=nickname,
+                group_hints=group_hints,
             ),
             metrics=self.metrics,
         )

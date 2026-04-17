@@ -226,6 +226,9 @@ class LLMClient:
         current_hour: int,
         current_date: str,
         current_year: int,
+        scene_type: str = "private",
+        group_bot_mentioned: bool = False,
+        group_allow_autonomous: bool = False,
     ) -> ShouldReplyDecision:
         data = self._call_json_decider(
             system_asset="prompt/ai_should_reply_system.md",
@@ -240,6 +243,9 @@ class LLMClient:
                 "current_hour": str(current_hour),
                 "current_date": current_date,
                 "current_year": str(current_year),
+                "scene_type": scene_type,
+                "group_bot_mentioned": str(group_bot_mentioned).lower(),
+                "group_allow_autonomous": str(group_allow_autonomous).lower(),
             },
         )
 

@@ -1,6 +1,7 @@
 from app.core.config import settings
 from app.core.metrics import MetricsRegistry
 from app.domain.conversation_scope import ConversationScope
+from app.domain.group_conversation_hints import GroupConversationHints
 from app.services.chat_orchestrator import ChatResult
 from app.services.conversation_window_manager import ConversationWindowManager
 
@@ -14,8 +15,14 @@ def test_termination_keyword_triggers_new_round() -> None:
     settings.rhythm.terminate_keywords = ["算了"]
     calls: list[list[str]] = []
 
-    def _executor(scope: ConversationScope, batch: list[str], abort_requested: bool, nickname: str | None) -> ChatResult:
-        del scope, abort_requested, nickname
+    def _executor(
+        scope: ConversationScope,
+        batch: list[str],
+        abort_requested: bool,
+        nickname: str | None,
+        _hints: GroupConversationHints,
+    ) -> ChatResult:
+        del scope, abort_requested, nickname, _hints
         calls.append(batch)
         return ChatResult(session_id="s1", reply="ok", session_emotion=0.1, global_emotion=0.2)
 

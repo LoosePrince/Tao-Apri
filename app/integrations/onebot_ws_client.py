@@ -187,13 +187,19 @@ class OneBotWSClient:
         scope: ConversationScope,
         user_text: str,
         nickname: str | None = None,
+        group_bot_mentioned: bool | None = None,
+        group_allow_autonomous: bool | None = None,
     ) -> None:
-        result = await asyncio.to_thread(
-            self.window_manager.process_user_message,
-            scope=scope,
-            user_message=user_text,
-            nickname=nickname,
-        )
+        thread_kwargs: dict[str, object] = {
+            "scope": scope,
+            "user_message": user_text,
+            "nickname": nickname,
+        }
+        if group_bot_mentioned is not None:
+            thread_kwargs["group_bot_mentioned"] = group_bot_mentioned
+        if group_allow_autonomous is not None:
+            thread_kwargs["group_allow_autonomous"] = group_allow_autonomous
+        result = await asyncio.to_thread(self.window_manager.process_user_message, **thread_kwargs)
         logger.info(
             "OneBot message processed | scope=%s | session_id=%s | session_emotion=%.3f | global_emotion=%.3f",
             scope.scope_id,
@@ -293,6 +299,8 @@ class OneBotWSClient:
         if message_id and not self._remember_message_id(message_id):
             logger.info("Skip duplicate message | user_id=%s | message_id=%s", user_id, message_id)
             return
+        group_bot_mentioned: bool | None = None
+        group_allow_autonomous: bool | None = None
         if message_type == "group":
             whitelist = set(settings.onebot.group_autonomous_whitelist or [])
             in_whitelist = group_id in whitelist
@@ -313,6 +321,8 @@ class OneBotWSClient:
                     self_id,
                 )
                 return
+            group_bot_mentioned = mentioned
+            group_allow_autonomous = allow_autonomous
         logger.info("OneBot received message | type=%s | user_id=%s | text=%s", message_type, user_id, user_text)
         logger.debug("OneBot full event payload: %s", event)
         sender_nickname: str | None = None
@@ -325,6 +335,15 @@ class OneBotWSClient:
         else:
             scope = ConversationScope.private(platform="onebot", user_id=str(user_id))
 
-        task = asyncio.create_task(self._process_message(ws, scope=scope, user_text=user_text, nickname=sender_nickname))
+        task = asyncio.create_task(
+            self._process_message(
+                ws,
+                scope=scope,
+                user_text=user_text,
+                nickname=sender_nickname,
+                group_bot_mentioned=group_bot_mentioned,
+                group_allow_autonomous=group_allow_autonomous,
+            )
+        )
         self._inflight_tasks.add(task)
         task.add_done_callback(self._on_inflight_done)

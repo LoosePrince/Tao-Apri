@@ -139,8 +139,17 @@ def test_onebot_group_whitelist_allows_without_mention(monkeypatch) -> None:
             super().__init__(window_manager=None)  # type: ignore[arg-type]
             self.scopes: list[str] = []
 
-        async def _process_message(self, ws, *, scope: ConversationScope, user_text: str, nickname: str | None = None) -> None:  # type: ignore[override]
-            del ws, user_text, nickname
+        async def _process_message(  # type: ignore[override]
+            self,
+            ws,
+            *,
+            scope: ConversationScope,
+            user_text: str,
+            nickname: str | None = None,
+            group_bot_mentioned: bool | None = None,
+            group_allow_autonomous: bool | None = None,
+        ) -> None:
+            del ws, user_text, nickname, group_bot_mentioned, group_allow_autonomous
             self.scopes.append(scope.scope_id)
 
     client = _Inspectable()

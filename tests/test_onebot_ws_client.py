@@ -32,9 +32,10 @@ class _InspectableOneBotClient(OneBotWSClient):
         scope: ConversationScope,
         user_text: str,
         nickname: str | None = None,
+        group_bot_mentioned: bool | None = None,
+        group_allow_autonomous: bool | None = None,
     ) -> None:
-        del ws
-        del nickname
+        del ws, nickname, group_bot_mentioned, group_allow_autonomous
         self.processed.append((int(scope.actor_user_id), user_text))
 
 

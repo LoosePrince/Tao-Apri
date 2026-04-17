@@ -55,6 +55,11 @@ def _embedded_fallback() -> dict[str, Any]:
             "negative_keywords": ["难过", "烦", "讨厌", "生气", "崩溃", "痛苦"],
             "step": 0.2,
         },
+        "group_chat": {
+            "suppress_reply_if_contains": ["别插嘴", "闭嘴", "不关你的事", "不是说你"],
+            "engagement_signals_without_mention": ["帮我", "怎么办", "为什么", "如何", "能不能"],
+            "strong_negative_message_score": -0.4,
+        },
     }
 
 
@@ -137,3 +142,44 @@ def emotion_scoring_lexicon() -> tuple[tuple[str, ...], tuple[str, ...], float]:
         neg = tuple(str(x) for x in fb.get("negative_keywords", []) if isinstance(x, str))
         step = float(fb.get("step", 0.2))
     return pos, neg, step
+
+
+def _group_chat_config() -> dict[str, Any]:
+    root = _load_lexicons()
+    gc = root.get("group_chat")
+    return gc if isinstance(gc, dict) else {}
+
+
+def group_suppress_reply_phrases() -> tuple[str, ...]:
+    gc = _group_chat_config()
+    raw = gc.get("suppress_reply_if_contains") or []
+    return tuple(str(x) for x in raw if isinstance(x, str) and x.strip())
+
+
+def group_engagement_signals_without_mention() -> tuple[str, ...]:
+    gc = _group_chat_config()
+    raw = gc.get("engagement_signals_without_mention") or []
+    return tuple(str(x) for x in raw if isinstance(x, str) and x.strip())
+
+
+def group_strong_negative_message_score() -> float:
+    gc = _group_chat_config()
+    try:
+        return float(gc.get("strong_negative_message_score", -0.4))
+    except (TypeError, ValueError):
+        return -0.4
+
+
+def should_suppress_group_reply_for_tone(text: str) -> bool:
+    return any(phrase in text for phrase in group_suppress_reply_phrases())
+
+
+def group_without_mention_has_clear_hook(text: str, message_emotion_score: float) -> bool:
+    """
+    True when the user likely needs a reply without @ — question, help request, or clearly negative tone.
+    """
+    if message_emotion_score <= group_strong_negative_message_score():
+        return True
+    if "?" in text or "？" in text:
+        return True
+    return any(sig in text for sig in group_engagement_signals_without_mention())

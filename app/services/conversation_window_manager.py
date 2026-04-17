@@ -9,6 +9,7 @@ from typing import Callable
 from app.core.config import settings
 from app.core.metrics import MetricsRegistry
 from app.domain.conversation_scope import ConversationScope
+from app.domain.group_conversation_hints import GroupConversationHints
 from app.services.chat_orchestrator import ChatResult
 
 logger = logging.getLogger(__name__)
@@ -28,6 +29,8 @@ class WindowState:
     q2: list[str] = field(default_factory=list)
     last_scope: ConversationScope | None = None
     last_nickname: str | None = None
+    group_bot_mentioned_or: bool = False
+    group_whitelist_autonomous: bool = False
     silence_deadline: float | None = None
     cooldown_until: float = 0.0
     active_round: int = 0
@@ -42,7 +45,7 @@ class ConversationWindowManager:
     def __init__(
         self,
         *,
-        batch_executor: Callable[[ConversationScope, list[str], bool, str | None], ChatResult],
+        batch_executor: Callable[[ConversationScope, list[str], bool, str | None, GroupConversationHints], ChatResult],
         metrics: MetricsRegistry,
     ) -> None:
         self.batch_executor = batch_executor
@@ -66,11 +69,23 @@ class ConversationWindowManager:
         self._thread = None
 
     def process_user_message(
-        self, *, scope: ConversationScope, user_message: str, nickname: str | None = None
+        self,
+        *,
+        scope: ConversationScope,
+        user_message: str,
+        nickname: str | None = None,
+        group_bot_mentioned: bool | None = None,
+        group_allow_autonomous: bool | None = None,
     ) -> ChatResult:
         started = time.monotonic()
         try:
-            result = self._enqueue_and_wait(scope=scope, user_message=user_message, nickname=nickname)
+            result = self._enqueue_and_wait(
+                scope=scope,
+                user_message=user_message,
+                nickname=nickname,
+                group_bot_mentioned=group_bot_mentioned,
+                group_allow_autonomous=group_allow_autonomous,
+            )
             self.metrics.observe_request(latency_ms=(time.monotonic() - started) * 1000.0, is_error=False)
             return result
         except Exception:
@@ -83,7 +98,15 @@ class ConversationWindowManager:
             self._states[scope_id] = WindowState()
         return self._states[scope_id]
 
-    def _enqueue_and_wait(self, *, scope: ConversationScope, user_message: str, nickname: str | None) -> ChatResult:
+    def _enqueue_and_wait(
+        self,
+        *,
+        scope: ConversationScope,
+        user_message: str,
+        nickname: str | None,
+        group_bot_mentioned: bool | None = None,
+        group_allow_autonomous: bool | None = None,
+    ) -> ChatResult:
         state = self._state_for(scope.scope_id)
         now = time.monotonic()
         delayed_trigger_deadline: float | None = None
@@ -93,6 +116,11 @@ class ConversationWindowManager:
                 nick = nickname.strip()
                 if nick:
                     state.last_nickname = nick
+            if scope.scene_type == "group":
+                if group_bot_mentioned is not None:
+                    state.group_bot_mentioned_or |= bool(group_bot_mentioned)
+                if group_allow_autonomous is not None:
+                    state.group_whitelist_autonomous |= bool(group_allow_autonomous)
             is_terminate = (
                 settings.rhythm.enable_terminate_keywords
                 and any(token in user_message for token in settings.rhythm.terminate_keywords)
@@ -160,6 +188,12 @@ class ConversationWindowManager:
                                 and now >= state.cooldown_until
                             ):
                                 batch = list(state.q1)
+                                batch_hints = GroupConversationHints(
+                                    bot_mentioned=state.group_bot_mentioned_or,
+                                    allow_autonomous_without_mention=state.group_whitelist_autonomous,
+                                )
+                                state.group_bot_mentioned_or = False
+                                state.group_whitelist_autonomous = False
                                 state.q1.clear()
                                 state.mode = "LOCKED"
                                 state.active_round = state.completed_round + 1
@@ -168,7 +202,7 @@ class ConversationWindowManager:
                                 self.metrics.inc("lock_trigger_count")
                                 threading.Thread(
                                     target=self._run_batch,
-                                    args=(scope_id, batch, state.active_round),
+                                    args=(scope_id, batch, state.active_round, batch_hints),
                                     name=f"window-batch-{scope_id}",
                                     daemon=True,
                                 ).start()
@@ -219,6 +253,12 @@ class ConversationWindowManager:
                 return
 
             batch = list(state.q1)
+            batch_hints = GroupConversationHints(
+                bot_mentioned=state.group_bot_mentioned_or,
+                allow_autonomous_without_mention=state.group_whitelist_autonomous,
+            )
+            state.group_bot_mentioned_or = False
+            state.group_whitelist_autonomous = False
             state.q1.clear()
             state.mode = "LOCKED"
             state.active_round = state.completed_round + 1
@@ -228,12 +268,12 @@ class ConversationWindowManager:
 
         threading.Thread(
             target=self._run_batch,
-            args=(scope_id, batch, state.active_round),
+            args=(scope_id, batch, state.active_round, batch_hints),
             name=f"window-batch-{scope_id}",
             daemon=True,
         ).start()
 
-    def _run_batch(self, scope_id: str, batch: list[str], round_id: int) -> None:
+    def _run_batch(self, scope_id: str, batch: list[str], round_id: int, group_hints: GroupConversationHints) -> None:
         state = self._state_for(scope_id)
         with state.lock:
             state.mode = "RESPONDING"
@@ -263,7 +303,9 @@ class ConversationWindowManager:
                 try:
                     if scope_for_batch is None:
                         raise RuntimeError("Missing ConversationScope for batch execution")
-                    holder["result"] = self.batch_executor(scope_for_batch, batch, abort_requested, nickname_for_batch)
+                    holder["result"] = self.batch_executor(
+                        scope_for_batch, batch, abort_requested, nickname_for_batch, group_hints
+                    )
                 except Exception as exc:  # pragma: no cover
                     holder["result"] = exc
                 finally:

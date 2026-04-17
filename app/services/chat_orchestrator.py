@@ -4,11 +4,16 @@ import json
 import threading
 
 from app.core.clock import now_local
-from app.core.rule_lexicons import classify_deterministic_topic
+from app.core.rule_lexicons import (
+    classify_deterministic_topic,
+    group_without_mention_has_clear_hook,
+    should_suppress_group_reply_for_tone,
+)
 from app.core.config import settings
 from app.core.metrics import MetricsRegistry
 from app.core.markdown_assets import read_required_markdown_asset
 from app.domain.conversation_scope import ConversationScope
+from app.domain.group_conversation_hints import GroupConversationHints
 from app.domain.models import Message, UserProfile, UserRelation
 from app.domain.services.emotion_engine import EmotionEngine
 from app.domain.services.identity_service import IdentityService
@@ -189,6 +194,75 @@ class ChatOrchestrator:
     def _clamp01(value: float) -> float:
         return max(0.0, min(1.0, value))
 
+    def _finish_skip_reply_no_assistant(
+        self,
+        *,
+        scope: ConversationScope,
+        session,
+        user_id: str,
+        user_message: str,
+        message_score: float,
+        emotion_state,
+        reason: str,
+    ) -> ChatResult:
+        self.metrics.inc("reply_skipped_count")
+        logger.info(
+            "Skip assistant reply (preflight) | user_id=%s | session_id=%s | reason=%s",
+            user_id,
+            session.session_id,
+            reason,
+        )
+        self.memory_writer.write(
+            scope=scope,
+            session_id=session.session_id,
+            user_id=user_id,
+            role="user",
+            content=user_message,
+            emotion_score=message_score,
+        )
+        return ChatResult(
+            session_id=session.session_id,
+            reply="",
+            session_emotion=emotion_state.session_emotion,
+            global_emotion=emotion_state.global_emotion,
+        )
+
+    def _try_group_early_skip_reply(
+        self,
+        *,
+        scope: ConversationScope,
+        session,
+        user_id: str,
+        user_message: str,
+        message_score: float,
+        emotion_state,
+        group_hints: GroupConversationHints,
+    ) -> ChatResult | None:
+        if scope.scene_type != "group":
+            return None
+        if should_suppress_group_reply_for_tone(user_message):
+            return self._finish_skip_reply_no_assistant(
+                scope=scope,
+                session=session,
+                user_id=user_id,
+                user_message=user_message,
+                message_score=message_score,
+                emotion_state=emotion_state,
+                reason="group:reject_interjection_tone",
+            )
+        if not group_hints.bot_mentioned:
+            if not group_without_mention_has_clear_hook(user_message, message_score):
+                return self._finish_skip_reply_no_assistant(
+                    scope=scope,
+                    session=session,
+                    user_id=user_id,
+                    user_message=user_message,
+                    message_score=message_score,
+                    emotion_state=emotion_state,
+                    reason="group:insufficient_hook_without_at",
+                )
+        return None
+
     def _update_user_relation_state(self, *, user_id: str, user_message: str, reply: str) -> None:
         relation = self.relation_repo.get(user_id, ASSISTANT_RELATION_ID) or UserRelation(
             source_user_id=user_id,
@@ -328,10 +402,17 @@ class ChatOrchestrator:
             user_messages=[user_message],
             abort_requested=False,
             nickname=None,
+            group_hints=None,
         )
 
     def handle_window_batch(
-        self, *, scope: ConversationScope, user_messages: list[str], abort_requested: bool, nickname: str | None = None
+        self,
+        *,
+        scope: ConversationScope,
+        user_messages: list[str],
+        abort_requested: bool,
+        nickname: str | None = None,
+        group_hints: GroupConversationHints | None = None,
     ) -> ChatResult:
         user_id = scope.actor_user_id
         raw_user_message = "\n".join(msg.strip() for msg in user_messages if msg.strip())
@@ -368,6 +449,19 @@ class ChatOrchestrator:
             emotion_state.session_emotion,
             emotion_state.global_emotion,
         )
+
+        gh = group_hints or GroupConversationHints()
+        preflight = self._try_group_early_skip_reply(
+            scope=scope,
+            session=session,
+            user_id=user_id,
+            user_message=user_message,
+            message_score=message_score,
+            emotion_state=emotion_state,
+            group_hints=gh,
+        )
+        if preflight is not None:
+            return preflight
 
         (
             profile_summary_generated,
@@ -570,6 +664,9 @@ class ChatOrchestrator:
                 current_hour=now.hour,
                 current_date=now.date().isoformat(),
                 current_year=now.year,
+                scene_type=scope.scene_type,
+                group_bot_mentioned=gh.bot_mentioned,
+                group_allow_autonomous=gh.allow_autonomous_without_mention,
             )
             if isinstance(decision, dict):
                 should_reply = bool(decision.get("should_reply", True))

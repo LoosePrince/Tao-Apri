@@ -14,6 +14,10 @@
 - current_hour: {current_hour}
 - current_date: {current_date}
 - current_year: {current_year}
+- scene_type: {scene_type}
+- group_bot_mentioned: {group_bot_mentioned}
+- group_allow_autonomous: {group_allow_autonomous}
 
-请在不确定时倾向回复（should_reply=true）。
-
+重要：
+- 当 scene_type 为 group 时，默认倾向 **不回复**；只有在你能明确判断“需要接话”时才回复。
+- 当 scene_type 为 private 时，在不确定时可倾向回复。
