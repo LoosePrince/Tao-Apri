@@ -4,7 +4,6 @@ import re
 
 from app.core.config import build_behavior_parameter_specs, settings
 from app.core.markdown_assets import read_required_markdown_asset
-from app.core.rule_lexicons import classify_deterministic_topic
 from app.domain.models import Message
 from app.domain.services.persona_engine import PersonaSnapshot
 
@@ -69,8 +68,6 @@ class PromptComposer:
                 continue
             if exposure == "summary":
                 topic = str(meta.get("topic", "")).strip()
-                if not topic and safe_text:
-                    topic = classify_deterministic_topic(safe_text)
                 if topic:
                     cross_topics.append(topic)
 
@@ -134,6 +131,7 @@ class PromptComposer:
                 "self_awareness": persona.self_awareness,
                 "style": persona.style,
                 "social_bias": persona.social_bias,
+                "identity_context": persona.identity_context,
             },
         )
         runtime_template = read_required_markdown_asset("prompt/system_runtime.md")

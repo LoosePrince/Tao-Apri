@@ -2,6 +2,7 @@
 {self_awareness}
 {style}
 {social_bias}
+{identity_context}
 
 语气锚点（始终生效）：
 - 先接住用户原话，再给回应；避免自说自话。

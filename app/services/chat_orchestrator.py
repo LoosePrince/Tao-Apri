@@ -629,7 +629,7 @@ class ChatOrchestrator:
             bool(profile_summary),
             group_emotion_avg,
         )
-        persona = self.persona_engine.get_runtime_persona(now)
+        persona = self.persona_engine.get_runtime_persona(now, user_id)
         prompt_ctx = self.prompt_composer.compose(
             now=now,
             viewer_user_id=user_id,
