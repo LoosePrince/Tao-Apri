@@ -74,6 +74,7 @@ class OneBotWSClient:
         self._task: asyncio.Task | None = None
         self._send_lock = asyncio.Lock()
         self._inflight_tasks: set[asyncio.Task] = set()
+        self._scope_process_sequence: dict[str, int] = {}
         self._processed_message_ids: dict[str, float] = {}
         self._processed_message_ttl_seconds = 600.0
         self._processed_message_max_entries = 4096
@@ -190,6 +191,9 @@ class OneBotWSClient:
         group_bot_mentioned: bool | None = None,
         group_allow_autonomous: bool | None = None,
     ) -> None:
+        scope_id = scope.scope_id
+        sequence = self._scope_process_sequence.get(scope_id, 0) + 1
+        self._scope_process_sequence[scope_id] = sequence
         thread_kwargs: dict[str, object] = {
             "scope": scope,
             "user_message": user_text,
@@ -207,6 +211,15 @@ class OneBotWSClient:
             result.session_emotion,
             result.global_emotion,
         )
+        latest_sequence = self._scope_process_sequence.get(scope_id, 0)
+        if latest_sequence != sequence:
+            logger.debug(
+                "Skip stale reply for scope | scope=%s | stale=%s | latest=%s",
+                scope_id,
+                sequence,
+                latest_sequence,
+            )
+            return
         logger.debug("OneBot reply text: %s", result.reply)
         await self._send_reply_segments(ws, scope=scope, reply=result.reply)
 

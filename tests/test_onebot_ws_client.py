@@ -1,6 +1,7 @@
 import asyncio
 
 from app.core.config import settings
+from app.services.chat_orchestrator import ChatResult
 from app.integrations.onebot_ws_client import OneBotWSClient
 from app.domain.conversation_scope import ConversationScope
 
@@ -240,3 +241,26 @@ def test_group_message_when_not_force_whitelist_allows_mentioned_non_whitelist()
     finally:
         settings.onebot.force_group_whitelist = old_force
         settings.onebot.group_autonomous_whitelist = old_whitelist
+
+
+def test_private_burst_messages_emit_single_reply() -> None:
+    class _BurstWindowManager:
+        def process_user_message(self, *, scope: ConversationScope, user_message: str, nickname: str | None = None):
+            del scope, user_message, nickname
+            return ChatResult(session_id="s1", reply="合并回复", session_emotion=0.1, global_emotion=0.2)
+
+    async def _run() -> tuple[int, int]:
+        client = OneBotWSClient(_BurstWindowManager())  # type: ignore[arg-type]
+        ws = _StubWS()
+        scope = ConversationScope.private(platform="onebot", user_id="1377820366")
+        tasks = [
+            asyncio.create_task(client._process_message(ws, scope=scope, user_text="m1")),
+            asyncio.create_task(client._process_message(ws, scope=scope, user_text="m2")),
+            asyncio.create_task(client._process_message(ws, scope=scope, user_text="m3")),
+        ]
+        await asyncio.gather(*tasks)
+        return len(ws.sent_payloads), len(tasks)
+
+    sent_count, task_count = asyncio.run(_run())
+    assert task_count == 3
+    assert sent_count == 1
