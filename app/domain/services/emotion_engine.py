@@ -2,6 +2,7 @@ from collections import deque
 from dataclasses import dataclass
 from statistics import fmean
 
+from app.core.rule_lexicons import emotion_scoring_lexicon
 from app.repos.interfaces import EmotionStateRepo
 
 
@@ -27,15 +28,14 @@ class EmotionEngine:
 
     def score_message(self, text: str) -> float:
         normalized = text.lower()
-        positive = ("开心", "高兴", "喜欢", "谢谢", "太棒", "赞")
-        negative = ("难过", "烦", "讨厌", "生气", "崩溃", "痛苦")
+        positive, negative, step = emotion_scoring_lexicon()
         score = 0.0
         for word in positive:
             if word in normalized:
-                score += 0.2
+                score += step
         for word in negative:
             if word in normalized:
-                score -= 0.2
+                score -= step
         return max(-1.0, min(1.0, score))
 
     def update(self, session_last_emotion: float, message_score: float) -> EmotionState:

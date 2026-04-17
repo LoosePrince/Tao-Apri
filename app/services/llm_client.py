@@ -9,6 +9,7 @@ from openai import OpenAI
 
 from app.core.config import settings
 from app.core.markdown_assets import read_required_markdown_asset
+from app.core.rule_lexicons import allowed_topic_labels
 from app.services.prompt_composer import PromptContext
 
 logger = logging.getLogger(__name__)
@@ -140,7 +141,7 @@ class LLMClient:
             values={"text": text},
         )
         topic = str(data.get("topic", "")).strip()
-        allowed = {"学习与考试", "工作与职业", "作息与健康", "情绪与关系", "娱乐与兴趣", "日常近况"}
+        allowed = allowed_topic_labels()
         return topic if topic in allowed else "日常近况"
 
     def generate_profile_decision(

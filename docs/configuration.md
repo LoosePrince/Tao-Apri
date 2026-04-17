@@ -9,6 +9,12 @@
 2. 按需修改 `.env`
 3. 启动服务
 
+## 规则词表（话题 / 脱敏 / 情绪关键词）
+
+- 离线确定性分类与事实提示词表位于 `prompt_assets/taxonomy/rule_lexicons.json`。
+- 运行时代码通过 `app/core/rule_lexicons.py` 读取（含缺失文件时的最小内嵌回退）。
+- 修改话题关键词时请保持与提示词 `prompt/ai_topic_*.md` 中的标签集合一致，或同步更新该提示词。
+
 ## 关键配置
 
 - `APP__NAME`：应用名

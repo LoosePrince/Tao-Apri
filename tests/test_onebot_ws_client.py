@@ -115,48 +115,66 @@ def test_send_reply_segments_waits_between_segments() -> None:
 
 
 def test_group_message_not_mentioned_is_skipped() -> None:
-    async def _run() -> list[tuple[int, str]]:
-        client = _InspectableOneBotClient()
-        ws = _StubWS()
-        event = {
-            "post_type": "message",
-            "message_type": "group",
-            "self_id": 3396584245,
-            "group_id": 10001,
-            "user_id": 1377820366,
-            "message_id": 1,
-            "sender": {"user_id": 1377820366},
-            "message": [{"type": "text", "data": {"text": "大家好"}}],
-        }
-        await client._handle_event(ws, event)
-        await asyncio.sleep(0)
-        return client.processed
+    old_force = settings.onebot.force_group_whitelist
+    old_whitelist = list(settings.onebot.group_autonomous_whitelist)
+    settings.onebot.force_group_whitelist = False
+    settings.onebot.group_autonomous_whitelist = []
+    try:
 
-    assert asyncio.run(_run()) == []
+        async def _run() -> list[tuple[int, str]]:
+            client = _InspectableOneBotClient()
+            ws = _StubWS()
+            event = {
+                "post_type": "message",
+                "message_type": "group",
+                "self_id": 3396584245,
+                "group_id": 10001,
+                "user_id": 1377820366,
+                "message_id": 1,
+                "sender": {"user_id": 1377820366},
+                "message": [{"type": "text", "data": {"text": "大家好"}}],
+            }
+            await client._handle_event(ws, event)
+            await asyncio.sleep(0)
+            return client.processed
+
+        assert asyncio.run(_run()) == []
+    finally:
+        settings.onebot.force_group_whitelist = old_force
+        settings.onebot.group_autonomous_whitelist = old_whitelist
 
 
 def test_group_message_mentioned_is_processed() -> None:
-    async def _run() -> list[tuple[int, str]]:
-        client = _InspectableOneBotClient()
-        ws = _StubWS()
-        event = {
-            "post_type": "message",
-            "message_type": "group",
-            "self_id": 3396584245,
-            "group_id": 10001,
-            "user_id": 1377820366,
-            "message_id": 2,
-            "sender": {"user_id": 1377820366},
-            "message": [
-                {"type": "at", "data": {"qq": "3396584245"}},
-                {"type": "text", "data": {"text": " 你好"}} ,
-            ],
-        }
-        await client._handle_event(ws, event)
-        await asyncio.sleep(0)
-        return client.processed
+    old_force = settings.onebot.force_group_whitelist
+    old_whitelist = list(settings.onebot.group_autonomous_whitelist)
+    settings.onebot.force_group_whitelist = False
+    settings.onebot.group_autonomous_whitelist = []
+    try:
 
-    assert asyncio.run(_run()) == [(1377820366, "你好")]
+        async def _run() -> list[tuple[int, str]]:
+            client = _InspectableOneBotClient()
+            ws = _StubWS()
+            event = {
+                "post_type": "message",
+                "message_type": "group",
+                "self_id": 3396584245,
+                "group_id": 10001,
+                "user_id": 1377820366,
+                "message_id": 2,
+                "sender": {"user_id": 1377820366},
+                "message": [
+                    {"type": "at", "data": {"qq": "3396584245"}},
+                    {"type": "text", "data": {"text": " 你好"}},
+                ],
+            }
+            await client._handle_event(ws, event)
+            await asyncio.sleep(0)
+            return client.processed
+
+        assert asyncio.run(_run()) == [(1377820366, "你好")]
+    finally:
+        settings.onebot.force_group_whitelist = old_force
+        settings.onebot.group_autonomous_whitelist = old_whitelist
 
 
 def test_group_message_force_whitelist_blocks_non_whitelist_even_if_mentioned() -> None:

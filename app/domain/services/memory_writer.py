@@ -1,6 +1,11 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
+from app.core.rule_lexicons import (
+    sanitize_sensitive_phrase_tokens,
+    text_hints_preference_fact,
+    text_hints_timeline_fact,
+)
 from app.domain.conversation_scope import ConversationScope
 from app.domain.models import MemoryFact, Message
 from app.repos.interfaces import FactRepo, MessageRepo, VectorRepo
@@ -22,7 +27,7 @@ class MemoryWriter:
         # 极简模糊化策略：移除常见高风险数字串与邮箱符号。
         sanitized = text
         sanitized = sanitized.replace("@", "[at]")
-        for token in ("身份证", "手机号", "银行卡", "密码", "住址"):
+        for token in sanitize_sensitive_phrase_tokens():
             sanitized = sanitized.replace(token, "[敏感信息]")
         return sanitized
 
@@ -39,8 +44,7 @@ class MemoryWriter:
     def extract_facts(user_id: str, source_message_id: str, text: str) -> list[MemoryFact]:
         now = datetime.now(timezone.utc)
         facts: list[MemoryFact] = []
-        lowered = text.lower()
-        if "喜欢" in text:
+        if text_hints_preference_fact(text):
             facts.append(
                 MemoryFact(
                     fact_id=str(uuid4()),
@@ -52,7 +56,7 @@ class MemoryWriter:
                     created_at=now,
                 )
             )
-        if any(token in lowered for token in ("今天", "明天", "昨晚", "周末")):
+        if text_hints_timeline_fact(text):
             facts.append(
                 MemoryFact(
                     fact_id=str(uuid4()),

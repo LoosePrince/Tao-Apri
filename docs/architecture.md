@@ -12,6 +12,7 @@
 - `services.prompt_composer`: 提示词上下文拼装
 - `jobs.task_queue` + `jobs.periodic_scheduler`: 异步任务与定时维护
 - `repos`: 数据访问抽象及 SQLite + 向量检索实现（含关系、偏好、画像、情绪状态）
+- `core.rule_lexicons`: 从 `prompt_assets/taxonomy/rule_lexicons.json` 加载话题词表、记忆事实提示词、脱敏词条与情绪打分词表
 
 ## 对话主流程
 

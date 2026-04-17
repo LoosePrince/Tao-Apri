@@ -4,6 +4,7 @@ import json
 import threading
 
 from app.core.clock import now_local
+from app.core.rule_lexicons import classify_deterministic_topic
 from app.core.config import settings
 from app.core.metrics import MetricsRegistry
 from app.core.markdown_assets import read_required_markdown_asset
@@ -266,20 +267,6 @@ class ChatOrchestrator:
         pre_preference_denied = 0
         decision_candidates: list[dict[str, object]] = []
 
-        def _classify_topic(text: str) -> str:
-            t = text
-            if any(k in t for k in ("学习", "考试", "复习", "作业", "论文", "备考")):
-                return "学习与考试"
-            if any(k in t for k in ("工作", "职业", "加班", "项目", "会议", "汇报", "同事", "岗位", "面试")):
-                return "工作与职业"
-            if any(k in t for k in ("睡", "作息", "健康", "锻炼", "运动", "早睡", "晚睡", "饮食", "感冒", "头痛")):
-                return "作息与健康"
-            if any(k in t for k in ("难过", "焦虑", "生气", "愤怒", "伤心", "烦", "绝望", "开心", "喜欢", "讨厌", "关系")):
-                return "情绪与关系"
-            if any(k in t for k in ("娱乐", "兴趣", "电影", "音乐", "游戏", "看剧", "旅游")):
-                return "娱乐与兴趣"
-            return "日常近况"
-
         for memory in memories:
             if memory.user_id == viewer_user_id:
                 visible.append(memory)
@@ -294,7 +281,7 @@ class ChatOrchestrator:
                 continue
             # - Explicit topic deny blocks cross access regardless of LLM decider output.
             if preference and preference.topic_visibility:
-                topic = _classify_topic(memory.sanitized_content)
+                topic = classify_deterministic_topic(memory.sanitized_content)
                 if preference.topic_visibility.get(topic) == "deny":
                     pre_preference_denied += 1
                     continue

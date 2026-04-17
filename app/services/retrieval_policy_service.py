@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.core.config import settings
+from app.core.rule_lexicons import classify_deterministic_topic
 from app.domain.conversation_scope import ConversationScope
 from app.domain.models import Message
 from app.repos.interfaces import PreferenceRepo, RelationRepo
@@ -26,21 +27,6 @@ class RetrievalPolicyService:
     def __init__(self, *, relation_repo: RelationRepo, preference_repo: PreferenceRepo) -> None:
         self.relation_repo = relation_repo
         self.preference_repo = preference_repo
-
-    @staticmethod
-    def _classify_topic(text: str) -> str:
-        t = text
-        if any(k in t for k in ("学习", "考试", "复习", "作业", "论文", "备考")):
-            return "学习与考试"
-        if any(k in t for k in ("工作", "职业", "加班", "项目", "会议", "汇报", "同事", "岗位", "面试")):
-            return "工作与职业"
-        if any(k in t for k in ("睡", "作息", "健康", "锻炼", "运动", "早睡", "晚睡", "饮食", "感冒", "头痛")):
-            return "作息与健康"
-        if any(k in t for k in ("难过", "焦虑", "生气", "愤怒", "伤心", "烦", "绝望", "开心", "喜欢", "讨厌", "关系")):
-            return "情绪与关系"
-        if any(k in t for k in ("娱乐", "兴趣", "电影", "音乐", "游戏", "看剧", "旅游")):
-            return "娱乐与兴趣"
-        return "日常近况"
 
     def decide(self, *, viewer: ConversationScope, memory: Message) -> RetrievalPolicyDecision:
         # Same scope: always allow (sanitized) full snippet.
@@ -67,7 +53,7 @@ class RetrievalPolicyService:
 
         # Topic deny is an explicit hard deny.
         if pref.topic_visibility:
-            topic = self._classify_topic(memory.sanitized_content)
+            topic = classify_deterministic_topic(memory.sanitized_content)
             if pref.topic_visibility.get(topic) == "deny":
                 return RetrievalPolicyDecision(exposure="deny", source_label="cross_scope_other", reason="topic_deny")
 
@@ -93,15 +79,9 @@ class RetrievalPolicyService:
                 )
             return RetrievalPolicyDecision(exposure="deny", source_label="same_group_other", reason="same_group_relation_low")
 
-        # Cross scope other (private <-> group, cross-group): conservative.
+        # Cross scope other (private <-> group, cross-group): conservative — default deny unless high bar for summary.
         if strength >= settings.retrieval.cross_neutral_threshold and trust >= 0.8:
             return RetrievalPolicyDecision(exposure="summary", source_label="cross_scope_other", reason="cross_scope_summary")
-        if strength >= settings.retrieval.cross_negative_threshold:
-            return RetrievalPolicyDecision(
-                exposure="redacted_snippet",
-                source_label="cross_scope_other",
-                reason="cross_scope_redacted_snippet",
-            )
         return RetrievalPolicyDecision(exposure="deny", source_label="cross_scope_other", reason="cross_scope_default_deny")
 
     def apply(self, *, viewer: ConversationScope, memories: list[Message]) -> tuple[list[Message], dict[str, int]]:
@@ -118,7 +98,7 @@ class RetrievalPolicyService:
                     "exposure": decision.exposure,
                     "source_label": decision.source_label,
                     "policy_reason": decision.reason,
-                    "topic": self._classify_topic(mem.sanitized_content),
+                    "topic": classify_deterministic_topic(mem.sanitized_content),
                 }
             )
             mem.retrieval_meta = meta
