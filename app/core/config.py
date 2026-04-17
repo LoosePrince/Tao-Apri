@@ -104,6 +104,28 @@ class OneBotConfig(BaseModel):
     group_autonomous_whitelist: list[int] = Field(default_factory=list)
 
 
+class OCRConfig(BaseModel):
+    enabled: bool = False
+    engine: str = "rapidocr"
+    max_image_mb: float = Field(default=10.0, ge=0.1, le=100.0)
+    download_timeout_seconds: float = Field(default=15.0, ge=1.0, le=120.0)
+
+
+class VisionConfig(BaseModel):
+    enabled: bool = False
+    base_url: str = ""
+    model: str = ""
+    api_key: str = ""
+    max_image_mb: float = Field(default=10.0, ge=0.1, le=100.0)
+    download_timeout_seconds: float = Field(default=15.0, ge=1.0, le=120.0)
+
+
+class ImageUnderstandingConfig(BaseModel):
+    enabled: bool = False
+    prefer_ocr_first: bool = True
+    merge_strategy: str = "ocr_plus_vision"
+
+
 class Settings(BaseSettings):
     app: AppConfig = AppConfig()
     storage: StorageConfig = StorageConfig()
@@ -116,6 +138,9 @@ class Settings(BaseSettings):
     llm: LLMConfig = LLMConfig()
     rhythm: RhythmConfig = RhythmConfig()
     onebot: OneBotConfig = OneBotConfig()
+    ocr: OCRConfig = OCRConfig()
+    vision: VisionConfig = VisionConfig()
+    image_understanding: ImageUnderstandingConfig = ImageUnderstandingConfig()
 
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -21,9 +21,10 @@ def test_termination_keyword_triggers_new_round() -> None:
         abort_requested: bool,
         nickname: str | None,
         source_message_id: str | None,
+        attachments: list[dict[str, object]],
         _hints: GroupConversationHints,
     ) -> ChatResult:
-        del scope, abort_requested, nickname, source_message_id, _hints
+        del scope, abort_requested, nickname, source_message_id, attachments, _hints
         calls.append(batch)
         return ChatResult(session_id="s1", reply="ok", session_emotion=0.1, global_emotion=0.2)
 

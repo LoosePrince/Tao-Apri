@@ -22,6 +22,7 @@ from app.domain.services.persona_engine import PersonaEngine
 from app.jobs.task_queue import TaskQueue
 from app.repos.interfaces import MessageRepo, PreferenceRepo, ProfileRepo, RelationRepo, VectorRepo
 from app.services.llm_client import LLMClient
+from app.services.image_understanding_service import ImageUnderstandingService
 from app.services.prompt_composer import PromptComposer
 from app.services.retrieval_policy_service import RetrievalPolicyService
 from app.services.window_preprocessor import WindowPreprocessor
@@ -57,6 +58,7 @@ class ChatOrchestrator:
         window_preprocessor: WindowPreprocessor,
         metrics: MetricsRegistry,
         retrieval_policy_service: RetrievalPolicyService | None = None,
+        image_understanding_service: ImageUnderstandingService | None = None,
     ) -> None:
         self.identity_service = identity_service
         self.persona_engine = persona_engine
@@ -76,6 +78,7 @@ class ChatOrchestrator:
             relation_repo=relation_repo,
             preference_repo=preference_repo,
         )
+        self.image_understanding_service = image_understanding_service
         self._session_emotion: dict[str, float] = {}
         self._session_emotion_lock = threading.RLock()
 
@@ -420,12 +423,19 @@ class ChatOrchestrator:
         abort_requested: bool,
         nickname: str | None = None,
         source_message_id: str | None = None,
+        attachments: list[dict[str, object]] | None = None,
         group_hints: GroupConversationHints | None = None,
     ) -> ChatResult:
         user_id = scope.actor_user_id
         raw_user_message = "\n".join(msg.strip() for msg in user_messages if msg.strip())
         preprocessed = self.window_preprocessor.preprocess(user_messages)
         user_message = preprocessed.merged_user_message or raw_user_message
+        image_context = ""
+        if attachments and self.image_understanding_service:
+            image_result = self.image_understanding_service.analyze_attachments(attachments)
+            if image_result.merged_summary:
+                image_context = image_result.merged_summary
+                user_message = f"{user_message}\n[图像识别补充]\n{image_context}".strip()
         self.metrics.inc("long_text_placeholder_count", preprocessed.long_placeholder_count)
         if preprocessed.used_window_summary:
             self.metrics.inc("window_compress_count")
@@ -699,6 +709,7 @@ class ChatOrchestrator:
                 group_bot_mentioned=gh.bot_mentioned,
                 group_allow_autonomous=gh.allow_autonomous_without_mention,
                 include_notice=session.turn_count == 0 and settings.persona.policy_notice_on_first_turn,
+                image_context=image_context,
             )
             should_reply = bool(getattr(unified, "should_reply", True))
             skip_reason = str(getattr(unified, "skip_reason", "")).strip()

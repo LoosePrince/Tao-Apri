@@ -23,6 +23,9 @@
 - current_date={current_date}
 - current_year={current_year}
 
+图像识别补充上下文（辅助证据，可能不完整）：
+{image_context}
+
 输出要求：
 - 只输出 JSON。
 - `should_reply=false` 时 `reply` 必须为空。

@@ -30,6 +30,7 @@ class WindowState:
     last_scope: ConversationScope | None = None
     last_nickname: str | None = None
     last_source_message_id: str | None = None
+    last_attachments: list[dict[str, object]] = field(default_factory=list)
     group_bot_mentioned_or: bool = False
     group_whitelist_autonomous: bool = False
     silence_deadline: float | None = None
@@ -47,7 +48,16 @@ class ConversationWindowManager:
         self,
         *,
         batch_executor: Callable[
-            [ConversationScope, list[str], bool, str | None, str | None, GroupConversationHints], ChatResult
+            [
+                ConversationScope,
+                list[str],
+                bool,
+                str | None,
+                str | None,
+                list[dict[str, object]],
+                GroupConversationHints,
+            ],
+            ChatResult,
         ],
         metrics: MetricsRegistry,
     ) -> None:
@@ -78,6 +88,7 @@ class ConversationWindowManager:
         user_message: str,
         nickname: str | None = None,
         source_message_id: str | None = None,
+        attachments: list[dict[str, object]] | None = None,
         group_bot_mentioned: bool | None = None,
         group_allow_autonomous: bool | None = None,
     ) -> ChatResult:
@@ -88,6 +99,7 @@ class ConversationWindowManager:
                 user_message=user_message,
                 nickname=nickname,
                 source_message_id=source_message_id,
+                attachments=attachments,
                 group_bot_mentioned=group_bot_mentioned,
                 group_allow_autonomous=group_allow_autonomous,
             )
@@ -110,6 +122,7 @@ class ConversationWindowManager:
         user_message: str,
         nickname: str | None,
         source_message_id: str | None,
+        attachments: list[dict[str, object]] | None,
         group_bot_mentioned: bool | None = None,
         group_allow_autonomous: bool | None = None,
     ) -> ChatResult:
@@ -124,6 +137,8 @@ class ConversationWindowManager:
                     state.last_nickname = nick
             if source_message_id and source_message_id.strip():
                 state.last_source_message_id = source_message_id.strip()
+            if attachments:
+                state.last_attachments = list(attachments)
             if scope.scene_type == "group":
                 if group_bot_mentioned is not None:
                     state.group_bot_mentioned_or |= bool(group_bot_mentioned)
@@ -288,6 +303,7 @@ class ConversationWindowManager:
             abort_requested = state.abort_requested
             nickname_for_batch = state.last_nickname
             source_message_id_for_batch = state.last_source_message_id
+            attachments_for_batch = list(state.last_attachments)
             scope_for_batch = state.last_scope
 
         def _fallback_timeout_result() -> ChatResult:
@@ -318,6 +334,7 @@ class ConversationWindowManager:
                         abort_requested,
                         nickname_for_batch,
                         source_message_id_for_batch,
+                        attachments_for_batch,
                         group_hints,
                     )
                 except Exception as exc:  # pragma: no cover

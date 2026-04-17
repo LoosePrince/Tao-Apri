@@ -3,6 +3,7 @@ import time
 import json
 import re
 import threading
+import base64
 from dataclasses import dataclass
 
 from openai import OpenAI
@@ -312,6 +313,43 @@ class LLMClient:
             return summary
         return "\n".join(f"- {item}" for item in messages[:8])
 
+    def analyze_image_with_vision_model(
+        self,
+        *,
+        image_url: str | None = None,
+        image_bytes: bytes | None = None,
+        prompt: str = "请简要描述图片内容，并提取可见文字。",
+        mime_type: str = "image/png",
+    ) -> str:
+        if not settings.vision.enabled:
+            return ""
+        if not settings.vision.api_key or not settings.vision.base_url or not settings.vision.model:
+            return ""
+        content_parts: list[dict[str, object]] = [{"type": "text", "text": prompt}]
+        if image_url:
+            content_parts.append({"type": "image_url", "image_url": {"url": image_url}})
+        elif image_bytes:
+            b64 = base64.b64encode(image_bytes).decode("ascii")
+            content_parts.append({"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{b64}"}})
+        else:
+            return ""
+        try:
+            vision_client = OpenAI(
+                api_key=settings.vision.api_key,
+                base_url=settings.vision.base_url,
+                timeout=settings.vision.download_timeout_seconds,
+            )
+            response = vision_client.chat.completions.create(
+                model=settings.vision.model,
+                temperature=0,
+                messages=[{"role": "user", "content": content_parts}],
+            )
+            text = response.choices[0].message.content if response.choices else ""
+            return (text or "").strip()
+        except Exception as exc:
+            logger.warning("Vision model analyze failed | err=%s", exc)
+            return ""
+
     def generate_unified_decision(
         self,
         *,
@@ -329,6 +367,7 @@ class LLMClient:
         group_bot_mentioned: bool = False,
         group_allow_autonomous: bool = False,
         include_notice: bool = True,
+        image_context: str = "",
     ) -> UnifiedDecision:
         provider = settings.llm.provider.lower().strip()
         if provider != "kilo" or not settings.llm.api_key or self._is_circuit_open():
@@ -360,6 +399,7 @@ class LLMClient:
                 "current_hour": str(current_hour),
                 "current_date": current_date,
                 "current_year": str(current_year),
+                "image_context": image_context.strip() or "无",
             },
         )
         client = self._get_client()

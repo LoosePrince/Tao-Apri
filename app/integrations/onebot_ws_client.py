@@ -99,6 +99,22 @@ def _extract_text_from_array_message(
             text_parts.append(placeholder)
     return "".join(text_parts).strip()
 
+
+def _extract_attachments_from_array_message(message: Any) -> list[dict[str, object]]:
+    if not isinstance(message, list):
+        return []
+    items: list[dict[str, object]] = []
+    for segment in message:
+        if not isinstance(segment, dict):
+            continue
+        seg_type = str(segment.get("type", "")).strip()
+        data = segment.get("data", {}) or {}
+        if not isinstance(data, dict):
+            data = {}
+        if seg_type in {"image", "file", "record", "video"}:
+            items.append({"type": seg_type, "data": data})
+    return items
+
 def _is_mentioned_in_array_message(message: Any, *, self_id: int) -> bool:
     if not isinstance(message, list):
         return False
@@ -269,6 +285,7 @@ class OneBotWSClient:
         *,
         scope: ConversationScope,
         user_text: str,
+        attachments: list[dict[str, object]] | None = None,
         source_message_id: str | None = None,
         nickname: str | None = None,
         group_bot_mentioned: bool | None = None,
@@ -282,6 +299,7 @@ class OneBotWSClient:
             "user_message": user_text,
             "nickname": nickname,
             "source_message_id": source_message_id,
+            "attachments": attachments or [],
         }
         if group_bot_mentioned is not None:
             thread_kwargs["group_bot_mentioned"] = group_bot_mentioned
@@ -388,6 +406,7 @@ class OneBotWSClient:
             return
 
         message_payload = event.get("message")
+        attachments = _extract_attachments_from_array_message(message_payload)
         user_text = _extract_text_from_array_message(
             message_payload,
             reply_text_resolver=self._resolve_reply_text,
@@ -442,6 +461,7 @@ class OneBotWSClient:
                 ws,
                 scope=scope,
                 user_text=user_text,
+                attachments=attachments,
                 source_message_id=message_id or None,
                 nickname=sender_nickname,
                 group_bot_mentioned=group_bot_mentioned,

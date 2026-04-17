@@ -2,7 +2,7 @@ import asyncio
 
 from app.core.config import settings
 from app.services.chat_orchestrator import ChatResult
-from app.integrations.onebot_ws_client import OneBotWSClient
+from app.integrations.onebot_ws_client import OneBotWSClient, _extract_attachments_from_array_message
 from app.domain.conversation_scope import ConversationScope
 
 
@@ -39,12 +39,13 @@ class _InspectableOneBotClient(OneBotWSClient):
         *,
         scope: ConversationScope,
         user_text: str,
+        attachments: list[dict[str, object]] | None = None,
         source_message_id: str | None = None,
         nickname: str | None = None,
         group_bot_mentioned: bool | None = None,
         group_allow_autonomous: bool | None = None,
     ) -> None:
-        del ws, source_message_id, nickname, group_bot_mentioned, group_allow_autonomous
+        del ws, attachments, source_message_id, nickname, group_bot_mentioned, group_allow_autonomous
         self.processed.append((int(scope.actor_user_id), user_text))
 
 
@@ -260,8 +261,9 @@ def test_private_burst_messages_emit_single_reply() -> None:
             user_message: str,
             nickname: str | None = None,
             source_message_id: str | None = None,
+            attachments: list[dict[str, object]] | None = None,
         ):
-            del scope, user_message, nickname, source_message_id
+            del scope, user_message, nickname, source_message_id, attachments
             return ChatResult(session_id="s1", reply="合并回复", session_emotion=0.1, global_emotion=0.2)
 
     async def _run() -> tuple[int, int]:
@@ -408,3 +410,18 @@ def test_reply_segment_can_resolve_external_lookup_when_cache_miss() -> None:
         return client.processed
 
     assert asyncio.run(_run()) == [(1377820366, "[reply: 数据库里那条消息] 我补充一下")]
+
+
+def test_extract_attachments_from_array_message_keeps_supported_media_segments() -> None:
+    attachments = _extract_attachments_from_array_message(
+        [
+            {"type": "image", "data": {"url": "http://example.com/a.png"}},
+            {"type": "text", "data": {"text": "hi"}},
+            {"type": "file", "data": {"name": "doc.txt"}},
+            {"type": "at", "data": {"qq": "1"}},
+        ]
+    )
+    assert attachments == [
+        {"type": "image", "data": {"url": "http://example.com/a.png"}},
+        {"type": "file", "data": {"name": "doc.txt"}},
+    ]

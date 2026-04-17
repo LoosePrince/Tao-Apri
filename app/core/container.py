@@ -22,6 +22,7 @@ from app.repos.sqlite_repo import (
 from app.services.chat_orchestrator import ChatOrchestrator
 from app.services.conversation_window_manager import ConversationWindowManager
 from app.services.llm_client import LLMClient
+from app.services.image_understanding_service import ImageUnderstandingService
 from app.services.prompt_composer import PromptComposer
 from app.services.window_preprocessor import WindowPreprocessor
 from app.domain.conversation_scope import ConversationScope
@@ -58,6 +59,7 @@ class Container:
         )
         self.prompt_composer = PromptComposer()
         self.llm_client = LLMClient()
+        self.image_understanding_service = ImageUnderstandingService(llm_client=self.llm_client)
         self.metrics = MetricsRegistry()
         self.window_preprocessor = WindowPreprocessor(llm_client=self.llm_client)
         self.task_queue = TaskQueue(
@@ -94,17 +96,19 @@ class Container:
             memory_writer=self.memory_writer,
             prompt_composer=self.prompt_composer,
             llm_client=self.llm_client,
+            image_understanding_service=self.image_understanding_service,
             task_queue=self.task_queue,
             window_preprocessor=self.window_preprocessor,
             metrics=self.metrics,
         )
         self.window_manager = ConversationWindowManager(
-            batch_executor=lambda scope, batch, abort, nickname, source_message_id, group_hints: self.chat_orchestrator.handle_window_batch(
+            batch_executor=lambda scope, batch, abort, nickname, source_message_id, attachments, group_hints: self.chat_orchestrator.handle_window_batch(
                 scope=scope,
                 user_messages=batch,
                 abort_requested=abort,
                 nickname=nickname,
                 source_message_id=source_message_id,
+                attachments=attachments,
                 group_hints=group_hints,
             ),
             metrics=self.metrics,
@@ -144,8 +148,10 @@ class Container:
 
             if llm_changed:
                 self.llm_client = LLMClient()
+                self.image_understanding_service = ImageUnderstandingService(llm_client=self.llm_client)
                 self.window_preprocessor = WindowPreprocessor(llm_client=self.llm_client)
                 rebuilt.append("llm_client")
+                rebuilt.append("image_understanding_service")
                 rebuilt.append("window_preprocessor")
 
             if emotion_changed:
@@ -188,6 +194,7 @@ class Container:
                     memory_writer=self.memory_writer,
                     prompt_composer=self.prompt_composer,
                     llm_client=self.llm_client,
+                    image_understanding_service=self.image_understanding_service,
                     task_queue=self.task_queue,
                     window_preprocessor=self.window_preprocessor,
                     metrics=self.metrics,
