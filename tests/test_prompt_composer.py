@@ -53,3 +53,6 @@ def test_cross_conversation_memories_are_topic_level_only() -> None:
     assert "13800138000" not in ctx.memory_context
     assert "20:30" not in ctx.memory_context
     assert "张三" not in ctx.memory_context
+    assert "参数执行总则" in ctx.parameter_context
+    assert "### LLM__TEMPERATURE" in ctx.parameter_context
+    assert "示例（用户）" in ctx.parameter_context

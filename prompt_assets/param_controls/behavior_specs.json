@@ -1,0 +1,1007 @@
+[
+  {
+    "name": "EMOTION__DECAY",
+    "value_range": "0.0-1.0",
+    "strictness_note": "值越高，历史情绪淡化越快。",
+    "meaning_by_band": [
+      {
+        "label": "低值",
+        "min_value": 0.0,
+        "max_value": 0.49,
+        "meaning": "延续历史情绪语境。",
+        "output_guidance": "保持连续情绪表达。",
+        "example_user_input": "我今天还好，但前几天很崩溃。",
+        "example_ai_output": "我会承接之前情绪并温和回应。"
+      },
+      {
+        "label": "高值",
+        "min_value": 0.5,
+        "max_value": 1.0,
+        "meaning": "更聚焦当前情绪输入。",
+        "output_guidance": "减少历史情绪追溯。",
+        "example_user_input": "我们只聊今天。",
+        "example_ai_output": "我会聚焦当下，不展开旧情绪。"
+      }
+    ]
+  },
+  {
+    "name": "EMOTION__GAIN",
+    "value_range": "0.0-2.0",
+    "strictness_note": "值越高，情绪放大越明显。",
+    "meaning_by_band": [
+      {
+        "label": "低值",
+        "min_value": 0.0,
+        "max_value": 0.99,
+        "meaning": "情绪响应平稳。",
+        "output_guidance": "语气更克制。",
+        "example_user_input": "我情绪波动很大。",
+        "example_ai_output": "我会稳定安抚，不放大情绪。"
+      },
+      {
+        "label": "高值",
+        "min_value": 1.0,
+        "max_value": 2.0,
+        "meaning": "更敏感跟随情绪变化。",
+        "output_guidance": "允许更明显的情感回应。",
+        "example_user_input": "我今天超开心！",
+        "example_ai_output": "我会更明显地积极回应。"
+      }
+    ]
+  },
+  {
+    "name": "EMOTION__MAX_HISTORY",
+    "value_range": "10+",
+    "strictness_note": "值越大，历史情绪窗口越长。",
+    "meaning_by_band": [
+      {
+        "label": "短窗口",
+        "min_value": 10,
+        "max_value": 200,
+        "meaning": "更偏近期情绪。",
+        "output_guidance": "优先当前上下文。",
+        "example_user_input": "我最近状态变了。",
+        "example_ai_output": "我会以最近状态为主回应。"
+      },
+      {
+        "label": "长窗口",
+        "min_value": 201,
+        "max_value": 5000,
+        "meaning": "更偏长期轨迹。",
+        "output_guidance": "可引用长期情绪趋势。",
+        "example_user_input": "我这段时间都很反复。",
+        "example_ai_output": "我会结合长期趋势回应。"
+      }
+    ]
+  },
+  {
+    "name": "RETRIEVAL__TOP_K",
+    "value_range": "1-50",
+    "strictness_note": "召回条数上限，影响信息密度。",
+    "meaning_by_band": [
+      {
+        "label": "低值",
+        "min_value": 1,
+        "max_value": 10,
+        "meaning": "更聚焦。",
+        "output_guidance": "引用少量高相关记忆。",
+        "example_user_input": "总结我之前重点。",
+        "example_ai_output": "我会给简洁重点总结。"
+      },
+      {
+        "label": "高值",
+        "min_value": 11,
+        "max_value": 50,
+        "meaning": "信息更丰富。",
+        "output_guidance": "可给多点背景。",
+        "example_user_input": "请全面回顾。",
+        "example_ai_output": "我会提供更完整回顾。"
+      }
+    ]
+  },
+  {
+    "name": "RETRIEVAL__MAX_ROUNDS",
+    "value_range": "1-10",
+    "strictness_note": "多轮检索深度上限。",
+    "meaning_by_band": [
+      {
+        "label": "低值",
+        "min_value": 1,
+        "max_value": 3,
+        "meaning": "快速响应。",
+        "output_guidance": "优先速度。",
+        "example_user_input": "快点回答。",
+        "example_ai_output": "我会快速给结论。"
+      },
+      {
+        "label": "高值",
+        "min_value": 4,
+        "max_value": 10,
+        "meaning": "更充分检索。",
+        "output_guidance": "优先补全上下文。",
+        "example_user_input": "先想全再答。",
+        "example_ai_output": "我会先充分整理再回答。"
+      }
+    ]
+  },
+  {
+    "name": "RETRIEVAL__MIN_SCORE",
+    "value_range": "0.0-1.0",
+    "strictness_note": "召回相似度阈值。",
+    "meaning_by_band": [
+      {
+        "label": "低阈值",
+        "min_value": 0.0,
+        "max_value": 0.49,
+        "meaning": "召回宽松。",
+        "output_guidance": "允许更多候选但标注不确定性。",
+        "example_user_input": "你还记得我说过什么吗？",
+        "example_ai_output": "我会给可能相关点并说明不确定。"
+      },
+      {
+        "label": "高阈值",
+        "min_value": 0.5,
+        "max_value": 1.0,
+        "meaning": "召回严格。",
+        "output_guidance": "宁缺毋滥。",
+        "example_user_input": "给我精准回忆。",
+        "example_ai_output": "我会仅给高置信信息。"
+      }
+    ]
+  },
+  {
+    "name": "RETRIEVAL__HEAT_BOOST_WEIGHT",
+    "value_range": "0.0-1.0",
+    "strictness_note": "热门记忆权重。",
+    "meaning_by_band": [
+      {
+        "label": "低值",
+        "min_value": 0.0,
+        "max_value": 0.49,
+        "meaning": "减少旧热门话题影响。",
+        "output_guidance": "更看当前语义。",
+        "example_user_input": "换个话题。",
+        "example_ai_output": "我会直接切新话题。"
+      },
+      {
+        "label": "高值",
+        "min_value": 0.5,
+        "max_value": 1.0,
+        "meaning": "增强热门主线延续。",
+        "output_guidance": "可延续近期高频主题。",
+        "example_user_input": "继续聊效率。",
+        "example_ai_output": "我会延续效率主线给建议。"
+      }
+    ]
+  },
+  {
+    "name": "RETRIEVAL__HEAT_DECAY_PER_DAY",
+    "value_range": "0.0-1.0",
+    "strictness_note": "热度日衰减。",
+    "meaning_by_band": [
+      {
+        "label": "低值",
+        "min_value": 0.0,
+        "max_value": 0.49,
+        "meaning": "旧热门保留更久。",
+        "output_guidance": "允许沿用旧主线。",
+        "example_user_input": "之前的话题还算吗？",
+        "example_ai_output": "我会继续参考较旧热门话题。"
+      },
+      {
+        "label": "高值",
+        "min_value": 0.5,
+        "max_value": 1.0,
+        "meaning": "热门更新更快。",
+        "output_guidance": "优先近期变化。",
+        "example_user_input": "我最近变了。",
+        "example_ai_output": "我会更看近期变化回应。"
+      }
+    ]
+  },
+  {
+    "name": "RETRIEVAL__HEAT_INCREMENT_ON_ACCESS",
+    "value_range": "0.0-1.0",
+    "strictness_note": "命中后热度增量。",
+    "meaning_by_band": [
+      {
+        "label": "低值",
+        "min_value": 0.0,
+        "max_value": 0.49,
+        "meaning": "主线形成慢。",
+        "output_guidance": "减少反复引用。",
+        "example_user_input": "这个点要一直跟踪。",
+        "example_ai_output": "我会跟踪但不过度重复。"
+      },
+      {
+        "label": "高值",
+        "min_value": 0.5,
+        "max_value": 1.0,
+        "meaning": "主线形成快。",
+        "output_guidance": "可持续强化当前主线。",
+        "example_user_input": "就按这个目标持续。",
+        "example_ai_output": "我会持续围绕该目标推进。"
+      }
+    ]
+  },
+  {
+    "name": "RETRIEVAL__RECENCY_WINDOW_DAYS",
+    "value_range": "1-365",
+    "strictness_note": "召回时间窗口。",
+    "meaning_by_band": [
+      {
+        "label": "短窗口",
+        "min_value": 1,
+        "max_value": 30,
+        "meaning": "偏近期。",
+        "output_guidance": "主要引用近期记忆。",
+        "example_user_input": "你记得我之前说的吗？",
+        "example_ai_output": "我会优先近期内容。"
+      },
+      {
+        "label": "长窗口",
+        "min_value": 31,
+        "max_value": 365,
+        "meaning": "覆盖更长历史。",
+        "output_guidance": "可引用长期信息。",
+        "example_user_input": "很久之前的你还记得吗？",
+        "example_ai_output": "我会尝试结合更长历史。"
+      }
+    ]
+  },
+  {
+    "name": "RETRIEVAL__CROSS_POSITIVE_THRESHOLD",
+    "value_range": "0.0-1.0",
+    "strictness_note": "正向关系跨对话门槛。",
+    "meaning_by_band": [
+      {
+        "label": "低门槛",
+        "min_value": 0.0,
+        "max_value": 0.49,
+        "meaning": "更易放行主题摘要。",
+        "output_guidance": "允许更多概况。",
+        "example_user_input": "参考别人经验。",
+        "example_ai_output": "我会给主题级概况。"
+      },
+      {
+        "label": "高门槛",
+        "min_value": 0.5,
+        "max_value": 1.0,
+        "meaning": "放行更严格。",
+        "output_guidance": "优先保守边界。",
+        "example_user_input": "告诉我别人的情况。",
+        "example_ai_output": "我会谨慎并限制为泛化概况。"
+      }
+    ]
+  },
+  {
+    "name": "RETRIEVAL__CROSS_NEUTRAL_THRESHOLD",
+    "value_range": "0.0-1.0",
+    "strictness_note": "中性关系跨对话门槛。",
+    "meaning_by_band": [
+      {
+        "label": "低门槛",
+        "min_value": 0.0,
+        "max_value": 0.49,
+        "meaning": "较易跨对话摘要。",
+        "output_guidance": "可给有限概况。",
+        "example_user_input": "大家普遍怎么想？",
+        "example_ai_output": "我会给群体趋势概况。"
+      },
+      {
+        "label": "高门槛",
+        "min_value": 0.5,
+        "max_value": 1.0,
+        "meaning": "较难跨对话摘要。",
+        "output_guidance": "更多拒答或未知。",
+        "example_user_input": "说说他人的细节。",
+        "example_ai_output": "我会拒绝细节并说明边界。"
+      }
+    ]
+  },
+  {
+    "name": "RETRIEVAL__CROSS_NEGATIVE_THRESHOLD",
+    "value_range": "0.0-1.0",
+    "strictness_note": "负向关系跨对话限制强度。",
+    "meaning_by_band": [
+      {
+        "label": "低值",
+        "min_value": 0.0,
+        "max_value": 0.49,
+        "meaning": "限制较弱。",
+        "output_guidance": "仍需隐私脱敏。",
+        "example_user_input": "别人最近如何？",
+        "example_ai_output": "我会仅给去标识概况。"
+      },
+      {
+        "label": "高值",
+        "min_value": 0.5,
+        "max_value": 1.0,
+        "meaning": "限制更强。",
+        "output_guidance": "优先拒绝跨对话引用。",
+        "example_user_input": "告诉我具体是谁。",
+        "example_ai_output": "我不会提供可识别信息。"
+      }
+    ]
+  },
+  {
+    "name": "RETRIEVAL__RELATION_ACCESS_MIN_STRENGTH",
+    "value_range": "0.0-1.0",
+    "strictness_note": "跨对话访问最低关系强度。",
+    "meaning_by_band": [
+      {
+        "label": "低门槛",
+        "min_value": 0.0,
+        "max_value": 0.49,
+        "meaning": "更易访问跨对话概况。",
+        "output_guidance": "可给主题摘要。",
+        "example_user_input": "别人最近焦虑吗？",
+        "example_ai_output": "我会给泛化趋势。"
+      },
+      {
+        "label": "高门槛",
+        "min_value": 0.5,
+        "max_value": 1.0,
+        "meaning": "跨对话访问更受限。",
+        "output_guidance": "不满足关系时直接未知。",
+        "example_user_input": "给我他人的具体反馈。",
+        "example_ai_output": "我会说明当前无法提供。"
+      }
+    ]
+  },
+  {
+    "name": "PERSONA__NAME",
+    "value_range": "string",
+    "strictness_note": "自我身份称谓必须一致。",
+    "meaning_by_band": [
+      {
+        "label": "固定身份",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "meaning": "保持稳定人设名称。",
+        "output_guidance": "不得频繁变更自称。",
+        "example_user_input": "你是谁？",
+        "example_ai_output": "我会按当前人设名称自我介绍。"
+      }
+    ]
+  },
+  {
+    "name": "PERSONA__POLICY_NOTICE_ON_FIRST_TURN",
+    "value_range": "true/false",
+    "strictness_note": "控制首轮是否注入策略声明。",
+    "meaning_by_band": [
+      {
+        "label": "false",
+        "min_value": 0.0,
+        "max_value": 0.49,
+        "meaning": "首轮不主动声明策略。",
+        "output_guidance": "直接进入任务对话。",
+        "example_user_input": "你好。",
+        "example_ai_output": "我会直接询问你的需求。"
+      },
+      {
+        "label": "true",
+        "min_value": 0.5,
+        "max_value": 1.0,
+        "meaning": "首轮注入边界提示。",
+        "output_guidance": "简短声明后进入对话。",
+        "example_user_input": "你好。",
+        "example_ai_output": "我会先简短提示边界再开始。"
+      }
+    ]
+  },
+  {
+    "name": "PERSONA__ASSETS_DIR",
+    "value_range": "path",
+    "strictness_note": "输出风格需与资产目录一致。",
+    "meaning_by_band": [
+      {
+        "label": "当前资产",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "meaning": "按当前资产集风格输出。",
+        "output_guidance": "不跨资产混用风格。",
+        "example_user_input": "你怎么这种语气？",
+        "example_ai_output": "我会保持当前资产定义的语气。"
+      }
+    ]
+  },
+  {
+    "name": "SESSION__RENEW_AFTER_HOURS",
+    "value_range": "0.1-168.0",
+    "strictness_note": "会话续期阈值。",
+    "meaning_by_band": [
+      {
+        "label": "短续期",
+        "min_value": 0.1,
+        "max_value": 24.0,
+        "meaning": "更容易开新会话。",
+        "output_guidance": "减少旧上下文绑定。",
+        "example_user_input": "我隔很久又来。",
+        "example_ai_output": "我会先确认当前需求。"
+      },
+      {
+        "label": "长续期",
+        "min_value": 24.01,
+        "max_value": 168.0,
+        "meaning": "更强调会话连续。",
+        "output_guidance": "可承接较久前上下文。",
+        "example_user_input": "接着上次说的。",
+        "example_ai_output": "我会直接承接之前话题。"
+      }
+    ]
+  },
+  {
+    "name": "PROFILE__RECENT_MESSAGE_LIMIT",
+    "value_range": "5-200",
+    "strictness_note": "画像参考消息窗口。",
+    "meaning_by_band": [
+      {
+        "label": "小窗口",
+        "min_value": 5,
+        "max_value": 30,
+        "meaning": "更偏近期风格。",
+        "output_guidance": "优先最近表达习惯。",
+        "example_user_input": "我最近说话变了。",
+        "example_ai_output": "我会优先按最近风格回应。"
+      },
+      {
+        "label": "大窗口",
+        "min_value": 31,
+        "max_value": 200,
+        "meaning": "更偏长期偏好。",
+        "output_guidance": "兼顾长期习惯与近期变化。",
+        "example_user_input": "你总按老习惯说。",
+        "example_ai_output": "我会在长期偏好上做近期校正。"
+      }
+    ]
+  },
+  {
+    "name": "LLM__PROVIDER",
+    "value_range": "string",
+    "strictness_note": "提供商决定能力路径与降级行为。",
+    "meaning_by_band": [
+      {
+        "label": "当前提供商",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "meaning": "按当前 provider 能力约束输出。",
+        "output_guidance": "provider 异常时显式说明。",
+        "example_user_input": "你走哪个通道？",
+        "example_ai_output": "我会说明当前通道与限制。"
+      }
+    ]
+  },
+  {
+    "name": "LLM__MODEL",
+    "value_range": "string",
+    "strictness_note": "模型能力边界需如实表达。",
+    "meaning_by_band": [
+      {
+        "label": "当前模型",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "meaning": "按当前模型能力组织答案。",
+        "output_guidance": "不夸大模型能力。",
+        "example_user_input": "你能处理复杂问题吗？",
+        "example_ai_output": "我会按当前模型能力范围回答。"
+      }
+    ]
+  },
+  {
+    "name": "LLM__API_KEY",
+    "value_range": "secret",
+    "strictness_note": "为空时必须明确降级，不得伪装完整能力。",
+    "meaning_by_band": [
+      {
+        "label": "empty",
+        "min_value": 0.0,
+        "max_value": 0.49,
+        "meaning": "链路可能降级。",
+        "output_guidance": "保守回答并说明边界。",
+        "example_user_input": "你怎么像没调用模型？",
+        "example_ai_output": "我会说明当前可能处于降级策略。"
+      },
+      {
+        "label": "configured",
+        "min_value": 0.5,
+        "max_value": 1.0,
+        "meaning": "链路完整可用。",
+        "output_guidance": "执行完整参数约束。",
+        "example_user_input": "你能更细致吗？",
+        "example_ai_output": "我会按完整上下文细致回应。"
+      }
+    ]
+  },
+  {
+    "name": "LLM__BASE_URL",
+    "value_range": "url",
+    "strictness_note": "用于网关能力与异常说明。",
+    "meaning_by_band": [
+      {
+        "label": "当前网关",
+        "min_value": 0.0,
+        "max_value": 1.0,
+        "meaning": "按网关可用性决定降级。",
+        "output_guidance": "异常时说明受限。",
+        "example_user_input": "为什么这次没答完整？",
+        "example_ai_output": "我会说明当前链路受限。"
+      }
+    ]
+  },
+  {
+    "name": "LLM__TEMPERATURE",
+    "value_range": "0.0-2.0",
+    "strictness_note": "控制稳定性与多样性。",
+    "meaning_by_band": [
+      {
+        "label": "低温度",
+        "min_value": 0.0,
+        "max_value": 0.7,
+        "meaning": "更稳定保守。",
+        "output_guidance": "简洁确定表达。",
+        "example_user_input": "给我学习计划。",
+        "example_ai_output": "我会给稳定、结构化方案。"
+      },
+      {
+        "label": "高温度",
+        "min_value": 0.71,
+        "max_value": 2.0,
+        "meaning": "更有变化和创造性。",
+        "output_guidance": "可更丰富但不越界。",
+        "example_user_input": "给点创意建议。",
+        "example_ai_output": "我会给更灵活的建议表达。"
+      }
+    ]
+  },
+  {
+    "name": "LLM__TIMEOUT_SECONDS",
+    "value_range": "5.0-120.0",
+    "strictness_note": "请求超时预算。",
+    "meaning_by_band": [
+      {
+        "label": "短超时",
+        "min_value": 5.0,
+        "max_value": 40.0,
+        "meaning": "更偏快速回答。",
+        "output_guidance": "优先核心结论。",
+        "example_user_input": "简单说重点。",
+        "example_ai_output": "我会先给关键结论。"
+      },
+      {
+        "label": "长超时",
+        "min_value": 40.01,
+        "max_value": 120.0,
+        "meaning": "可组织更完整回答。",
+        "output_guidance": "可提供更完整结构。",
+        "example_user_input": "请详细解释。",
+        "example_ai_output": "我会给更完整分步说明。"
+      }
+    ]
+  },
+  {
+    "name": "LLM__STARTUP_HEALTHCHECK_ENABLED",
+    "value_range": "true/false",
+    "strictness_note": "启动健康检查开关。",
+    "meaning_by_band": [
+      {
+        "label": "false",
+        "min_value": 0.0,
+        "max_value": 0.49,
+        "meaning": "运行期暴露异常。",
+        "output_guidance": "异常时说明运行期发现。",
+        "example_user_input": "为什么启动没报错？",
+        "example_ai_output": "可能因未启用启动检查。"
+      },
+      {
+        "label": "true",
+        "min_value": 0.5,
+        "max_value": 1.0,
+        "meaning": "启动期先行发现异常。",
+        "output_guidance": "可更早提示配置问题。",
+        "example_user_input": "服务能否自检？",
+        "example_ai_output": "已启用启动检查，会提前暴露问题。"
+      }
+    ]
+  },
+  {
+    "name": "LLM__RETRY_MAX_ATTEMPTS",
+    "value_range": "1-10",
+    "strictness_note": "失败重试上限。",
+    "meaning_by_band": [
+      {
+        "label": "低值",
+        "min_value": 1,
+        "max_value": 3,
+        "meaning": "更快失败返回。",
+        "output_guidance": "及时降级反馈。",
+        "example_user_input": "怎么有时中断？",
+        "example_ai_output": "我会快速降级并说明。"
+      },
+      {
+        "label": "高值",
+        "min_value": 4,
+        "max_value": 10,
+        "meaning": "更充分重试。",
+        "output_guidance": "优先恢复可用性。",
+        "example_user_input": "尽量别失败。",
+        "example_ai_output": "我会尽量重试后再反馈。"
+      }
+    ]
+  },
+  {
+    "name": "LLM__RETRY_BACKOFF_SECONDS",
+    "value_range": "0.0-30.0",
+    "strictness_note": "重试退避基线。",
+    "meaning_by_band": [
+      {
+        "label": "低值",
+        "min_value": 0.0,
+        "max_value": 5.0,
+        "meaning": "重试更快。",
+        "output_guidance": "恢复快但可能抖动。",
+        "example_user_input": "怎么一下快一下慢？",
+        "example_ai_output": "退避短时会更快重试。"
+      },
+      {
+        "label": "高值",
+        "min_value": 5.01,
+        "max_value": 30.0,
+        "meaning": "重试更稳。",
+        "output_guidance": "恢复慢但更稳健。",
+        "example_user_input": "希望更稳一点。",
+        "example_ai_output": "我会采用更保守的重试节奏。"
+      }
+    ]
+  },
+  {
+    "name": "LLM__CIRCUIT_BREAKER_FAILURE_THRESHOLD",
+    "value_range": "1-50",
+    "strictness_note": "熔断触发阈值。",
+    "meaning_by_band": [
+      {
+        "label": "低值",
+        "min_value": 1,
+        "max_value": 10,
+        "meaning": "更快熔断。",
+        "output_guidance": "优先稳定。",
+        "example_user_input": "为什么很快就不可用？",
+        "example_ai_output": "可能因熔断阈值较低。"
+      },
+      {
+        "label": "高值",
+        "min_value": 11,
+        "max_value": 50,
+        "meaning": "更晚熔断。",
+        "output_guidance": "优先可用性。",
+        "example_user_input": "尽量继续服务。",
+        "example_ai_output": "会在更高失败次数后再熔断。"
+      }
+    ]
+  },
+  {
+    "name": "LLM__CIRCUIT_BREAKER_OPEN_SECONDS",
+    "value_range": "1.0-3600.0",
+    "strictness_note": "熔断开启时长。",
+    "meaning_by_band": [
+      {
+        "label": "短时长",
+        "min_value": 1.0,
+        "max_value": 60.0,
+        "meaning": "更快尝试恢复。",
+        "output_guidance": "可较快重试。",
+        "example_user_input": "多久恢复？",
+        "example_ai_output": "恢复尝试会更频繁。"
+      },
+      {
+        "label": "长时长",
+        "min_value": 60.01,
+        "max_value": 3600.0,
+        "meaning": "恢复更慢但更稳。",
+        "output_guidance": "保护系统稳定。",
+        "example_user_input": "为什么恢复慢？",
+        "example_ai_output": "熔断时长较长以保证稳定。"
+      }
+    ]
+  },
+  {
+    "name": "RHYTHM__ENABLED",
+    "value_range": "true/false",
+    "strictness_note": "节奏控制总开关。",
+    "meaning_by_band": [
+      {
+        "label": "false",
+        "min_value": 0.0,
+        "max_value": 0.49,
+        "meaning": "关闭节奏控制。",
+        "output_guidance": "按普通流程回复。",
+        "example_user_input": "我连发几条。",
+        "example_ai_output": "不做节奏型聚合控制。"
+      },
+      {
+        "label": "true",
+        "min_value": 0.5,
+        "max_value": 1.0,
+        "meaning": "启用节奏控制。",
+        "output_guidance": "按窗口/冷却等规则执行。",
+        "example_user_input": "我会连续补充。",
+        "example_ai_output": "我会按节奏策略聚合处理。"
+      }
+    ]
+  },
+  {
+    "name": "RHYTHM__SILENCE_SECONDS",
+    "value_range": "1.0-120.0",
+    "strictness_note": "静默判定阈值。",
+    "meaning_by_band": [
+      {
+        "label": "短静默",
+        "min_value": 1.0,
+        "max_value": 15.0,
+        "meaning": "更快触发处理。",
+        "output_guidance": "及时输出。",
+        "example_user_input": "我说完了吗？",
+        "example_ai_output": "会较快进入响应。"
+      },
+      {
+        "label": "长静默",
+        "min_value": 15.01,
+        "max_value": 120.0,
+        "meaning": "等待更多输入。",
+        "output_guidance": "更晚触发处理。",
+        "example_user_input": "我还在补充。",
+        "example_ai_output": "会等待更久再聚合响应。"
+      }
+    ]
+  },
+  {
+    "name": "RHYTHM__ENABLE_MAX_THINK_SECONDS",
+    "value_range": "true/false",
+    "strictness_note": "单轮最大思考时限开关。",
+    "meaning_by_band": [
+      {
+        "label": "false",
+        "min_value": 0.0,
+        "max_value": 0.49,
+        "meaning": "不启用截断。",
+        "output_guidance": "不受 max_think 限制。",
+        "example_user_input": "你慢慢想。",
+        "example_ai_output": "我不会按 max_think 强制截断。"
+      },
+      {
+        "label": "true",
+        "min_value": 0.5,
+        "max_value": 1.0,
+        "meaning": "启用截断。",
+        "output_guidance": "超时需收束输出。",
+        "example_user_input": "快点给我结果。",
+        "example_ai_output": "我会在时限内给结论。"
+      }
+    ]
+  },
+  {
+    "name": "RHYTHM__MAX_THINK_SECONDS",
+    "value_range": "5.0-300.0",
+    "strictness_note": "单轮思考时限。",
+    "meaning_by_band": [
+      {
+        "label": "短时限",
+        "min_value": 5.0,
+        "max_value": 60.0,
+        "meaning": "更快回复。",
+        "output_guidance": "优先结论简洁。",
+        "example_user_input": "简单回答。",
+        "example_ai_output": "我会快速给关键点。"
+      },
+      {
+        "label": "长时限",
+        "min_value": 60.01,
+        "max_value": 300.0,
+        "meaning": "允许更完整组织。",
+        "output_guidance": "可更详细。",
+        "example_user_input": "详细说说。",
+        "example_ai_output": "我会给更完整分层说明。"
+      }
+    ]
+  },
+  {
+    "name": "RHYTHM__COOLDOWN_SECONDS",
+    "value_range": "0.0-30.0",
+    "strictness_note": "回复后冷却时间。",
+    "meaning_by_band": [
+      {
+        "label": "短冷却",
+        "min_value": 0.0,
+        "max_value": 5.0,
+        "meaning": "连续响应更快。",
+        "output_guidance": "节奏更紧凑。",
+        "example_user_input": "继续继续。",
+        "example_ai_output": "我会较快接续响应。"
+      },
+      {
+        "label": "长冷却",
+        "min_value": 5.01,
+        "max_value": 30.0,
+        "meaning": "连续响应更克制。",
+        "output_guidance": "避免过快连发。",
+        "example_user_input": "怎么变慢了？",
+        "example_ai_output": "我会按冷却策略控制节奏。"
+      }
+    ]
+  },
+  {
+    "name": "RHYTHM__SINGLE_MESSAGE_CHAR_THRESHOLD",
+    "value_range": "20-5000",
+    "strictness_note": "单条长文本字符阈值。",
+    "meaning_by_band": [
+      {
+        "label": "低阈值",
+        "min_value": 20,
+        "max_value": 300,
+        "meaning": "更易触发摘要。",
+        "output_guidance": "先总结后回答。",
+        "example_user_input": "我发了一大段。",
+        "example_ai_output": "我会先提炼重点再答。"
+      },
+      {
+        "label": "高阈值",
+        "min_value": 301,
+        "max_value": 5000,
+        "meaning": "更少触发摘要。",
+        "output_guidance": "保留更多原文细节。",
+        "example_user_input": "请按原文细节回答。",
+        "example_ai_output": "我会更完整地按原文回应。"
+      }
+    ]
+  },
+  {
+    "name": "RHYTHM__SINGLE_MESSAGE_TOKEN_THRESHOLD",
+    "value_range": "20-8000",
+    "strictness_note": "单条长文本 token 阈值。",
+    "meaning_by_band": [
+      {
+        "label": "低阈值",
+        "min_value": 20,
+        "max_value": 600,
+        "meaning": "更易触发 token 摘要。",
+        "output_guidance": "优先压缩后回答。",
+        "example_user_input": "我内容很长。",
+        "example_ai_output": "我会先压缩重点再回答。"
+      },
+      {
+        "label": "高阈值",
+        "min_value": 601,
+        "max_value": 8000,
+        "meaning": "更少触发 token 摘要。",
+        "output_guidance": "可处理更长细节。",
+        "example_user_input": "请详细读完。",
+        "example_ai_output": "我会保留更多细节回应。"
+      }
+    ]
+  },
+  {
+    "name": "RHYTHM__WINDOW_CHAR_THRESHOLD",
+    "value_range": "50-20000",
+    "strictness_note": "窗口总字符阈值。",
+    "meaning_by_band": [
+      {
+        "label": "低阈值",
+        "min_value": 50,
+        "max_value": 1000,
+        "meaning": "窗口更易压缩。",
+        "output_guidance": "优先窗口摘要。",
+        "example_user_input": "我连续发很多条。",
+        "example_ai_output": "我会先归纳窗口重点。"
+      },
+      {
+        "label": "高阈值",
+        "min_value": 1001,
+        "max_value": 20000,
+        "meaning": "窗口更保留细节。",
+        "output_guidance": "可引用更多上下文原文。",
+        "example_user_input": "保持上下文细节。",
+        "example_ai_output": "我会保留更多上下文细节。"
+      }
+    ]
+  },
+  {
+    "name": "RHYTHM__WINDOW_TOKEN_THRESHOLD",
+    "value_range": "50-40000",
+    "strictness_note": "窗口总 token 阈值。",
+    "meaning_by_band": [
+      {
+        "label": "低阈值",
+        "min_value": 50,
+        "max_value": 2000,
+        "meaning": "更易窗口压缩。",
+        "output_guidance": "优先摘要整合。",
+        "example_user_input": "我发了很多上下文。",
+        "example_ai_output": "我会先整合再回答。"
+      },
+      {
+        "label": "高阈值",
+        "min_value": 2001,
+        "max_value": 40000,
+        "meaning": "更少压缩。",
+        "output_guidance": "保留更多上下文细节。",
+        "example_user_input": "按完整上下文来。",
+        "example_ai_output": "我会尽量基于完整上下文回应。"
+      }
+    ]
+  },
+  {
+    "name": "RHYTHM__ENABLE_TERMINATE_KEYWORDS",
+    "value_range": "true/false",
+    "strictness_note": "终止词策略开关。",
+    "meaning_by_band": [
+      {
+        "label": "false",
+        "min_value": 0.0,
+        "max_value": 0.49,
+        "meaning": "忽略终止词。",
+        "output_guidance": "继续正常流程。",
+        "example_user_input": "算了不用了。",
+        "example_ai_output": "我会继续常规响应。"
+      },
+      {
+        "label": "true",
+        "min_value": 0.5,
+        "max_value": 1.0,
+        "meaning": "命中终止词时收束。",
+        "output_guidance": "短句结束，不再扩展。",
+        "example_user_input": "不用了，就这样。",
+        "example_ai_output": "明白，我先收住，需要再叫我。"
+      }
+    ]
+  },
+  {
+    "name": "RHYTHM__TERMINATE_KEYWORDS",
+    "value_range": "JSON string list",
+    "strictness_note": "定义触发收束的关键词列表。",
+    "meaning_by_band": [
+      {
+        "label": "未命中",
+        "min_value": 0.0,
+        "max_value": 0.49,
+        "meaning": "不触发收束。",
+        "output_guidance": "正常回复。",
+        "example_user_input": "继续聊。",
+        "example_ai_output": "我会继续完整回应。"
+      },
+      {
+        "label": "命中",
+        "min_value": 0.5,
+        "max_value": 1.0,
+        "meaning": "触发收束。",
+        "output_guidance": "结束式短回复。",
+        "example_user_input": "算了，当我没说。",
+        "example_ai_output": "好，我先不展开了。"
+      }
+    ]
+  },
+  {
+    "name": "RHYTHM__WAIT_TIMEOUT_SECONDS",
+    "value_range": "5.0-600.0",
+    "strictness_note": "窗口等待超时。",
+    "meaning_by_band": [
+      {
+        "label": "短超时",
+        "min_value": 5.0,
+        "max_value": 120.0,
+        "meaning": "更快结束等待。",
+        "output_guidance": "优先及时响应。",
+        "example_user_input": "先回我重点。",
+        "example_ai_output": "我会尽快给核心回复。"
+      },
+      {
+        "label": "长超时",
+        "min_value": 120.01,
+        "max_value": 600.0,
+        "meaning": "等待更多上下文。",
+        "output_guidance": "可延后以聚合输入。",
+        "example_user_input": "我还会继续补充。",
+        "example_ai_output": "我会等待更完整后再答。"
+      }
+    ]
+  }
+]

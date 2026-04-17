@@ -26,6 +26,14 @@
 9. 写入 assistant 消息，异步更新关系状态
 10. 返回回复与情绪状态
 
+## 参数约束化链路（2026-04-17 更新）
+
+- `app.core.config.build_behavior_parameter_specs()`：生成行为参数语义规格（值域、分段、示例）。
+- `services.prompt_composer`：将参数规格渲染为 `parameter_context` 注入提示词。
+- `prompt_assets/prompt/system_wrapper.md`：新增 `参数控制` 区块，要求模型按当前参数分段执行。
+- `services.llm_client`：`include_notice` 与 `parameter_context` 均进入 system prompt，不再丢弃。
+- `services.retrieval_policy_service`：跨对话关系阈值改为读取 `settings.retrieval.*`，避免 env 配置失效。
+
 ## 非隔离记忆原则
 
 - 原始消息保留在 `messages` 表中的 `raw_content`

@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import re
 
+from app.core.config import build_behavior_parameter_specs, settings
 from app.core.markdown_assets import read_required_markdown_asset
 from app.domain.models import Message
 from app.domain.services.persona_engine import PersonaSnapshot
@@ -13,6 +14,7 @@ class PromptContext:
     system_runtime: str
     memory_context: str
     policy_notice: str
+    parameter_context: str
     profile_context: str
     user_message: str
 
@@ -106,6 +108,31 @@ class PromptComposer:
 
         return "\n".join(memory_lines) if memory_lines else empty_context
 
+    @staticmethod
+    def _build_parameter_context() -> str:
+        specs = build_behavior_parameter_specs()
+        lines: list[str] = []
+        lines.append(read_required_markdown_asset("param_controls/behavior_control.md"))
+        lines.append("参数约束说明：以下参数直接约束你的回复风格与行为，必须执行。")
+        lines.append("- 禁止忽略当前参数值；若参数间冲突，优先遵守安全与隐私边界。")
+        if not settings.llm.api_key:
+            lines.append("- 当前 LLM__API_KEY 为空，部分决策链路可能降级为默认策略；需在回复中保持保守和明确边界。")
+        for spec in specs:
+            lines.append(f"### {spec.name}")
+            lines.append(f"- 当前值：{spec.current_value}")
+            lines.append(f"- 值域：{spec.value_range}")
+            lines.append(f"- 约束：{spec.strictness_note}")
+            lines.append("- 分段含义与示例：")
+            for band in spec.meaning_by_band:
+                lines.append(
+                    f"  - [{band.label}] {band.min_value}-{band.max_value}：{band.meaning}；输出要求：{band.output_guidance}"
+                )
+                lines.append(
+                    f"    示例（用户）：{band.example_user_input}；示例（你应输出）：{band.example_ai_output}"
+                )
+        lines.append("执行规则：先判定当前值落入哪个分段，再按该分段的输出要求组织回复。")
+        return "\n".join(lines)
+
     def compose(
         self,
         *,
@@ -146,6 +173,7 @@ class PromptComposer:
             system_runtime=system_runtime,
             memory_context=memory_context,
             policy_notice=policy_notice,
+            parameter_context=self._build_parameter_context(),
             profile_context=viewer_profile_summary.strip() or default_profile_context,
             user_message=user_message,
         )

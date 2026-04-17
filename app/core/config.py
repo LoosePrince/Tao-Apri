@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -123,3 +126,99 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+class ParameterBand(BaseModel):
+    label: str
+    min_value: float
+    max_value: float
+    meaning: str
+    output_guidance: str
+    example_user_input: str
+    example_ai_output: str
+
+
+class ParameterSemanticSpec(BaseModel):
+    name: str
+    current_value: str
+    value_range: str
+    strictness_note: str
+    meaning_by_band: list[ParameterBand]
+
+
+def _behavior_specs_json_path() -> Path:
+    return Path(__file__).resolve().parents[2] / "prompt_assets" / "param_controls" / "behavior_specs.json"
+
+
+def _current_behavior_parameter_values() -> dict[str, str]:
+    emotion = settings.emotion
+    retrieval = settings.retrieval
+    llm = settings.llm
+    rhythm = settings.rhythm
+    session = settings.session
+    profile = settings.profile
+    persona = settings.persona
+    return {
+        "EMOTION__DECAY": f"{emotion.decay:.3f}",
+        "EMOTION__GAIN": f"{emotion.gain:.3f}",
+        "EMOTION__MAX_HISTORY": str(emotion.max_history),
+        "RETRIEVAL__TOP_K": str(retrieval.top_k),
+        "RETRIEVAL__MAX_ROUNDS": str(retrieval.max_rounds),
+        "RETRIEVAL__MIN_SCORE": f"{retrieval.min_score:.3f}",
+        "RETRIEVAL__HEAT_BOOST_WEIGHT": f"{retrieval.heat_boost_weight:.3f}",
+        "RETRIEVAL__HEAT_DECAY_PER_DAY": f"{retrieval.heat_decay_per_day:.3f}",
+        "RETRIEVAL__HEAT_INCREMENT_ON_ACCESS": f"{retrieval.heat_increment_on_access:.3f}",
+        "RETRIEVAL__RECENCY_WINDOW_DAYS": str(retrieval.recency_window_days),
+        "RETRIEVAL__CROSS_POSITIVE_THRESHOLD": f"{retrieval.cross_positive_threshold:.3f}",
+        "RETRIEVAL__CROSS_NEUTRAL_THRESHOLD": f"{retrieval.cross_neutral_threshold:.3f}",
+        "RETRIEVAL__CROSS_NEGATIVE_THRESHOLD": f"{retrieval.cross_negative_threshold:.3f}",
+        "RETRIEVAL__RELATION_ACCESS_MIN_STRENGTH": f"{retrieval.relation_access_min_strength:.3f}",
+        "PERSONA__NAME": persona.name,
+        "PERSONA__POLICY_NOTICE_ON_FIRST_TURN": str(persona.policy_notice_on_first_turn).lower(),
+        "PERSONA__ASSETS_DIR": persona.assets_dir,
+        "SESSION__RENEW_AFTER_HOURS": f"{session.renew_after_hours:.2f}",
+        "PROFILE__RECENT_MESSAGE_LIMIT": str(profile.recent_message_limit),
+        "LLM__PROVIDER": llm.provider,
+        "LLM__MODEL": llm.model,
+        "LLM__API_KEY": "configured" if bool(llm.api_key) else "empty",
+        "LLM__BASE_URL": llm.base_url,
+        "LLM__TEMPERATURE": f"{llm.temperature:.2f}",
+        "LLM__TIMEOUT_SECONDS": f"{llm.timeout_seconds:.1f}",
+        "LLM__STARTUP_HEALTHCHECK_ENABLED": str(llm.startup_healthcheck_enabled).lower(),
+        "LLM__RETRY_MAX_ATTEMPTS": str(llm.retry_max_attempts),
+        "LLM__RETRY_BACKOFF_SECONDS": f"{llm.retry_backoff_seconds:.2f}",
+        "LLM__CIRCUIT_BREAKER_FAILURE_THRESHOLD": str(llm.circuit_breaker_failure_threshold),
+        "LLM__CIRCUIT_BREAKER_OPEN_SECONDS": f"{llm.circuit_breaker_open_seconds:.1f}",
+        "RHYTHM__ENABLED": str(rhythm.enabled).lower(),
+        "RHYTHM__SILENCE_SECONDS": f"{rhythm.silence_seconds:.1f}",
+        "RHYTHM__ENABLE_MAX_THINK_SECONDS": str(rhythm.enable_max_think_seconds).lower(),
+        "RHYTHM__MAX_THINK_SECONDS": f"{rhythm.max_think_seconds:.1f}",
+        "RHYTHM__COOLDOWN_SECONDS": f"{rhythm.cooldown_seconds:.1f}",
+        "RHYTHM__SINGLE_MESSAGE_CHAR_THRESHOLD": str(rhythm.single_message_char_threshold),
+        "RHYTHM__SINGLE_MESSAGE_TOKEN_THRESHOLD": str(rhythm.single_message_token_threshold),
+        "RHYTHM__WINDOW_CHAR_THRESHOLD": str(rhythm.window_char_threshold),
+        "RHYTHM__WINDOW_TOKEN_THRESHOLD": str(rhythm.window_token_threshold),
+        "RHYTHM__ENABLE_TERMINATE_KEYWORDS": str(rhythm.enable_terminate_keywords).lower(),
+        "RHYTHM__TERMINATE_KEYWORDS": ",".join(rhythm.terminate_keywords),
+        "RHYTHM__WAIT_TIMEOUT_SECONDS": f"{rhythm.wait_timeout_seconds:.1f}",
+    }
+
+
+def build_behavior_parameter_specs() -> list[ParameterSemanticSpec]:
+    with _behavior_specs_json_path().open("r", encoding="utf-8") as f:
+        raw_items = json.load(f)
+    current_values = _current_behavior_parameter_values()
+    specs: list[ParameterSemanticSpec] = []
+    for raw in raw_items:
+        name = str(raw.get("name", "")).strip()
+        if not name:
+            continue
+        payload = {
+            "name": name,
+            "current_value": current_values.get(name, str(raw.get("current_value", ""))),
+            "value_range": str(raw.get("value_range", "")),
+            "strictness_note": str(raw.get("strictness_note", "")),
+            "meaning_by_band": raw.get("meaning_by_band", []),
+        }
+        specs.append(ParameterSemanticSpec.model_validate(payload))
+    return specs

@@ -10,3 +10,6 @@
 
 策略说明：
 {policy_notice}
+
+参数控制：
+{parameter_context}

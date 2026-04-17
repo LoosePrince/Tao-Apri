@@ -81,6 +81,40 @@
 
 说明：`kilo` provider 使用 OpenAI 官方 Python SDK，以 OpenAI 兼容模式连接 Kilo 网关；当网关不可用时，系统将统一返回“当前不可用，请联系管理员（debug账号）”，不再回退 mock 回复。
 
+## 参数约束化（已启用）
+
+- 行为参数会在运行时被统一转换为“当前值 + 值域 + 分段含义 + 示例对照”，并注入系统提示词。
+- 语义规格来源：`app/core/config.py` 中 `build_behavior_parameter_specs()`。
+- 参数文案与示例来源：`prompt_assets/param_controls/behavior_specs.json`（避免硬编码在 Python 中）。
+- 提示词注入位置：
+  - `prompt_assets/param_controls/behavior_control.md`
+  - `prompt_assets/prompt/system_wrapper.md` 的 `参数控制` 区块
+- 冲突优先级：安全与隐私边界 > 终止/节奏 > 关系与检索 > 情绪与风格。
+
+### 纳入约束的参数集合
+
+- `EMOTION__DECAY` / `EMOTION__GAIN` / `EMOTION__MAX_HISTORY`
+- `RETRIEVAL__TOP_K` / `RETRIEVAL__MAX_ROUNDS` / `RETRIEVAL__MIN_SCORE`
+- `RETRIEVAL__HEAT_BOOST_WEIGHT` / `RETRIEVAL__HEAT_DECAY_PER_DAY` / `RETRIEVAL__HEAT_INCREMENT_ON_ACCESS`
+- `RETRIEVAL__RECENCY_WINDOW_DAYS` / `RETRIEVAL__CROSS_POSITIVE_THRESHOLD` / `RETRIEVAL__CROSS_NEUTRAL_THRESHOLD`
+- `RETRIEVAL__CROSS_NEGATIVE_THRESHOLD` / `RETRIEVAL__RELATION_ACCESS_MIN_STRENGTH`
+- `PERSONA__NAME` / `PERSONA__POLICY_NOTICE_ON_FIRST_TURN` / `PERSONA__ASSETS_DIR`
+- `SESSION__RENEW_AFTER_HOURS`
+- `PROFILE__RECENT_MESSAGE_LIMIT`
+- `LLM__PROVIDER` / `LLM__MODEL` / `LLM__API_KEY` / `LLM__BASE_URL` / `LLM__TEMPERATURE`
+- `LLM__TIMEOUT_SECONDS` / `LLM__STARTUP_HEALTHCHECK_ENABLED` / `LLM__RETRY_MAX_ATTEMPTS`
+- `LLM__RETRY_BACKOFF_SECONDS` / `LLM__CIRCUIT_BREAKER_FAILURE_THRESHOLD` / `LLM__CIRCUIT_BREAKER_OPEN_SECONDS`
+- `RHYTHM__ENABLED` / `RHYTHM__SILENCE_SECONDS` / `RHYTHM__ENABLE_MAX_THINK_SECONDS` / `RHYTHM__MAX_THINK_SECONDS`
+- `RHYTHM__COOLDOWN_SECONDS` / `RHYTHM__SINGLE_MESSAGE_CHAR_THRESHOLD` / `RHYTHM__SINGLE_MESSAGE_TOKEN_THRESHOLD`
+- `RHYTHM__WINDOW_CHAR_THRESHOLD` / `RHYTHM__WINDOW_TOKEN_THRESHOLD` / `RHYTHM__ENABLE_TERMINATE_KEYWORDS`
+- `RHYTHM__TERMINATE_KEYWORDS` / `RHYTHM__WAIT_TIMEOUT_SECONDS`
+
+### 示例约束规则
+
+- 同一用户输入在不同参数分段下会注入不同示例，模型必须按当前分段输出。
+- 当 `LLM__API_KEY` 为空时，提示词会显式声明降级状态，禁止伪装“完整模型链路”。
+- `PERSONA__POLICY_NOTICE_ON_FIRST_TURN=true` 时首轮会注入策略提示；`false` 时不注入。
+
 ## OneBot 11 配置
 
 - `ONEBOT__ENABLED`：是否启用 OneBot WS 客户端

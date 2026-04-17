@@ -304,10 +304,10 @@ class LLMClient:
         memory_count: int,
         include_notice: bool,
     ) -> str:
-        del session_emotion, global_emotion, memory_count, include_notice
+        del session_emotion, global_emotion, memory_count
         provider = settings.llm.provider.lower().strip()
         if provider == "kilo":
-            reply = self._call_kilo(prompt_context)
+            reply = self._call_kilo(prompt_context, include_notice=include_notice)
             if reply:
                 return reply
             return self._service_unavailable_message()
@@ -433,17 +433,18 @@ class LLMClient:
         return template.format(admin_id=admin_id)
 
     @staticmethod
-    def _build_system_prompt(prompt_context: PromptContext) -> str:
+    def _build_system_prompt(prompt_context: PromptContext, *, include_notice: bool) -> str:
         wrapper_template = read_required_markdown_asset("prompt/system_wrapper.md")
         return wrapper_template.format(
             system_core=prompt_context.system_core,
             system_runtime=prompt_context.system_runtime,
             profile_context=prompt_context.profile_context,
             memory_context=prompt_context.memory_context,
-            policy_notice=prompt_context.policy_notice,
+            policy_notice=prompt_context.policy_notice if include_notice else "本轮不注入首轮策略提示。",
+            parameter_context=prompt_context.parameter_context,
         ).strip()
 
-    def _call_kilo(self, prompt_context: PromptContext) -> str:
+    def _call_kilo(self, prompt_context: PromptContext, *, include_notice: bool) -> str:
         if not settings.llm.api_key:
             logger.error("LLM provider is kilo but api_key is empty.")
             return ""
@@ -458,7 +459,7 @@ class LLMClient:
         )
         logger.debug(
             "Kilo request payload summary | system_len=%s | user_len=%s | temperature=%.2f",
-            len(self._build_system_prompt(prompt_context)),
+            len(self._build_system_prompt(prompt_context, include_notice=include_notice)),
             len(prompt_context.user_message),
             settings.llm.temperature,
         )
@@ -483,7 +484,10 @@ class LLMClient:
                     model=settings.llm.model,
                     temperature=settings.llm.temperature,
                     messages=[
-                        {"role": "system", "content": self._build_system_prompt(prompt_context)},
+                        {
+                            "role": "system",
+                            "content": self._build_system_prompt(prompt_context, include_notice=include_notice),
+                        },
                         {"role": "user", "content": prompt_context.user_message},
                     ],
                 )

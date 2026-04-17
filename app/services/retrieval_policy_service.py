@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from app.core.config import settings
 from app.domain.conversation_scope import ConversationScope
 from app.domain.models import Message
 from app.repos.interfaces import PreferenceRepo, RelationRepo
@@ -61,7 +62,7 @@ class RetrievalPolicyService:
             return RetrievalPolicyDecision(exposure="deny", source_label="cross_scope_other", reason="relation_negative")
         strength = rel.strength if rel else 0.0
         trust = rel.trust_score if rel else 0.0
-        if strength < 0.2:
+        if strength < settings.retrieval.relation_access_min_strength:
             return RetrievalPolicyDecision(exposure="deny", source_label="cross_scope_other", reason="relation_weak")
 
         # Topic deny is an explicit hard deny.
@@ -78,17 +79,29 @@ class RetrievalPolicyService:
             and memory.group_id
             and viewer.group_id == memory.group_id
         ):
-            if strength >= 0.85 and trust >= 0.6:
+            if strength >= settings.retrieval.cross_positive_threshold and trust >= 0.6:
                 return RetrievalPolicyDecision(
                     exposure="redacted_snippet",
                     source_label="same_group_other",
                     reason="same_group_high_trust",
                 )
-            return RetrievalPolicyDecision(exposure="summary", source_label="same_group_other", reason="same_group_summary")
+            if strength >= settings.retrieval.cross_neutral_threshold:
+                return RetrievalPolicyDecision(
+                    exposure="summary",
+                    source_label="same_group_other",
+                    reason="same_group_summary",
+                )
+            return RetrievalPolicyDecision(exposure="deny", source_label="same_group_other", reason="same_group_relation_low")
 
         # Cross scope other (private <-> group, cross-group): conservative.
-        if strength >= 0.9 and trust >= 0.8:
+        if strength >= settings.retrieval.cross_neutral_threshold and trust >= 0.8:
             return RetrievalPolicyDecision(exposure="summary", source_label="cross_scope_other", reason="cross_scope_summary")
+        if strength >= settings.retrieval.cross_negative_threshold:
+            return RetrievalPolicyDecision(
+                exposure="redacted_snippet",
+                source_label="cross_scope_other",
+                reason="cross_scope_redacted_snippet",
+            )
         return RetrievalPolicyDecision(exposure="deny", source_label="cross_scope_other", reason="cross_scope_default_deny")
 
     def apply(self, *, viewer: ConversationScope, memories: list[Message]) -> tuple[list[Message], dict[str, int]]:
