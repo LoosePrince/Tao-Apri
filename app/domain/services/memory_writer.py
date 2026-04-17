@@ -79,10 +79,13 @@ class MemoryWriter:
         role: str,
         content: str,
         emotion_score: float,
+        source_message_id: str | None = None,
     ) -> Message:
         effective_scope = scope or ConversationScope.private(platform="unknown", user_id=user_id)
+        message_id = str(uuid4())
+        normalized_source_message_id = (source_message_id or "").strip() or message_id
         message = Message(
-            message_id=str(uuid4()),
+            message_id=message_id,
             user_id=user_id,
             role=role,
             raw_content=content,
@@ -93,6 +96,7 @@ class MemoryWriter:
             scene_type=effective_scope.scene_type,
             group_id=effective_scope.group_id,
             platform=effective_scope.platform,
+            source_message_id=normalized_source_message_id,
             emotion_score=emotion_score,
             related_user_ids=self.extract_related_users(content),
         )

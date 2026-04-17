@@ -74,7 +74,11 @@ async def apply_runtime_config(request: Request, payload: RuntimeConfigUpdatePay
 
     onebot_service = getattr(request.app.state, "onebot_service", None)
     if isinstance(onebot_service, OneBotService) and need_onebot_restart:
-        await onebot_service.restart(window_manager=container.window_manager)
+        reply_lookup = getattr(container.message_repo, "get_latest_text_by_source_message_id", None)
+        await onebot_service.restart(
+            window_manager=container.window_manager,
+            reply_message_lookup=reply_lookup if callable(reply_lookup) else None,
+        )
 
     return {
         "ok": True,

@@ -72,7 +72,11 @@ async def lifespan(app: FastAPI):
             logger.error("LLM startup health check failed, service continues in degraded mode.")
     onebot_service = OneBotService()
     app.state.onebot_service = onebot_service
-    await onebot_service.start(window_manager=container.window_manager)
+    reply_lookup = getattr(container.message_repo, "get_latest_text_by_source_message_id", None)
+    await onebot_service.start(
+        window_manager=container.window_manager,
+        reply_message_lookup=reply_lookup if callable(reply_lookup) else None,
+    )
     try:
         yield
     finally:

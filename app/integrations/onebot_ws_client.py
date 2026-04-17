@@ -5,7 +5,7 @@ import json
 import logging
 import re
 import time
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse, urlunparse
 
 import websockets
@@ -30,7 +30,51 @@ def _normalize_ws_url(raw_url: str) -> str:
     return urlunparse(parsed)
 
 
-def _extract_text_from_array_message(message: Any) -> str:
+def _build_segment_placeholder(
+    seg_type: str,
+    data: dict[str, Any],
+    *,
+    reply_text_resolver: Callable[[str], str] | None = None,
+) -> str:
+    if seg_type == "image":
+        name = str(data.get("file", "")).strip()
+        return f"[image: {name}]" if name else "[image]"
+    if seg_type == "file":
+        name = str(data.get("name", "")).strip() or str(data.get("file", "")).strip()
+        return f"[file: {name}]" if name else "[file]"
+    if seg_type == "record":
+        name = str(data.get("file", "")).strip()
+        return f"[record: {name}]" if name else "[record]"
+    if seg_type == "video":
+        name = str(data.get("file", "")).strip()
+        return f"[video: {name}]" if name else "[video]"
+    if seg_type == "reply":
+        reply_text = str(data.get("text", "")).strip()
+        if reply_text:
+            brief = reply_text[:80]
+            return f"[reply: {brief}]"
+        message_id = str(data.get("id", "")).strip()
+        if message_id and callable(reply_text_resolver):
+            resolved = str(reply_text_resolver(message_id) or "").strip()
+            if resolved:
+                brief = resolved[:80]
+                return f"[reply: {brief}]"
+        return f"[reply: {message_id}]" if message_id else "[reply]"
+    if seg_type == "json":
+        return "[json]"
+    if seg_type == "xml":
+        return "[xml]"
+    if seg_type == "face":
+        face_id = str(data.get("id", "")).strip()
+        return f"[face: {face_id}]" if face_id else "[face]"
+    return ""
+
+
+def _extract_text_from_array_message(
+    message: Any,
+    *,
+    reply_text_resolver: Callable[[str], str] | None = None,
+) -> str:
     if isinstance(message, str):
         return message
     if not isinstance(message, list):
@@ -43,6 +87,16 @@ def _extract_text_from_array_message(message: Any) -> str:
         data = segment.get("data", {})
         if seg_type == "text":
             text_parts.append(str(data.get("text", "")))
+            continue
+        if seg_type in {"at"}:
+            continue
+        placeholder = _build_segment_placeholder(
+            str(seg_type or "").strip(),
+            data if isinstance(data, dict) else {},
+            reply_text_resolver=reply_text_resolver,
+        )
+        if placeholder:
+            text_parts.append(placeholder)
     return "".join(text_parts).strip()
 
 def _is_mentioned_in_array_message(message: Any, *, self_id: int) -> bool:
@@ -68,8 +122,14 @@ def _is_mentioned_in_array_message(message: Any, *, self_id: int) -> bool:
 
 
 class OneBotWSClient:
-    def __init__(self, window_manager: ConversationWindowManager) -> None:
+    def __init__(
+        self,
+        window_manager: ConversationWindowManager,
+        *,
+        reply_message_lookup: Callable[[str], str] | None = None,
+    ) -> None:
         self.window_manager = window_manager
+        self.reply_message_lookup = reply_message_lookup
         self._stop_event = asyncio.Event()
         self._task: asyncio.Task | None = None
         self._send_lock = asyncio.Lock()
@@ -78,6 +138,7 @@ class OneBotWSClient:
         self._processed_message_ids: dict[str, float] = {}
         self._processed_message_ttl_seconds = 600.0
         self._processed_message_max_entries = 4096
+        self._message_text_cache: dict[str, tuple[str, float]] = {}
 
     def _remember_message_id(self, message_id: str) -> bool:
         now = time.monotonic()
@@ -95,6 +156,27 @@ class OneBotWSClient:
 
         self._processed_message_ids[message_id] = now
         return True
+
+    def _remember_message_text(self, message_id: str, text: str) -> None:
+        if not message_id.strip() or not text.strip():
+            return
+        now = time.monotonic()
+        expired_before = now - self._processed_message_ttl_seconds
+        stale_ids = [key for key, value in self._message_text_cache.items() if value[1] < expired_before]
+        for stale_id in stale_ids:
+            self._message_text_cache.pop(stale_id, None)
+        if len(self._message_text_cache) >= self._processed_message_max_entries:
+            oldest_id = next(iter(self._message_text_cache))
+            self._message_text_cache.pop(oldest_id, None)
+        self._message_text_cache[message_id] = (text, now)
+
+    def _resolve_reply_text(self, message_id: str) -> str:
+        item = self._message_text_cache.get(message_id)
+        if item:
+            return item[0]
+        if callable(self.reply_message_lookup):
+            return str(self.reply_message_lookup(message_id) or "").strip()
+        return ""
 
     async def start(self) -> None:
         if not settings.onebot.enabled:
@@ -187,6 +269,7 @@ class OneBotWSClient:
         *,
         scope: ConversationScope,
         user_text: str,
+        source_message_id: str | None = None,
         nickname: str | None = None,
         group_bot_mentioned: bool | None = None,
         group_allow_autonomous: bool | None = None,
@@ -198,6 +281,7 @@ class OneBotWSClient:
             "scope": scope,
             "user_message": user_text,
             "nickname": nickname,
+            "source_message_id": source_message_id,
         }
         if group_bot_mentioned is not None:
             thread_kwargs["group_bot_mentioned"] = group_bot_mentioned
@@ -304,7 +388,10 @@ class OneBotWSClient:
             return
 
         message_payload = event.get("message")
-        user_text = _extract_text_from_array_message(message_payload)
+        user_text = _extract_text_from_array_message(
+            message_payload,
+            reply_text_resolver=self._resolve_reply_text,
+        )
         if not user_text:
             logger.debug("Skip empty text message payload=%s", message_payload)
             return
@@ -312,6 +399,8 @@ class OneBotWSClient:
         if message_id and not self._remember_message_id(message_id):
             logger.info("Skip duplicate message | user_id=%s | message_id=%s", user_id, message_id)
             return
+        if message_id:
+            self._remember_message_text(message_id, user_text)
         group_bot_mentioned: bool | None = None
         group_allow_autonomous: bool | None = None
         if message_type == "group":
@@ -353,6 +442,7 @@ class OneBotWSClient:
                 ws,
                 scope=scope,
                 user_text=user_text,
+                source_message_id=message_id or None,
                 nickname=sender_nickname,
                 group_bot_mentioned=group_bot_mentioned,
                 group_allow_autonomous=group_allow_autonomous,

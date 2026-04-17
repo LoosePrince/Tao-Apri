@@ -19,9 +19,10 @@ def test_window_lock_and_handover() -> None:
         batch: list[str],
         abort_requested: bool,
         nickname: str | None,
+        source_message_id: str | None,
         _hints: GroupConversationHints,
     ) -> ChatResult:
-        del scope, abort_requested, nickname, _hints
+        del scope, abort_requested, nickname, source_message_id, _hints
         calls.append(batch)
         return ChatResult(session_id="s1", reply="ok", session_emotion=0.1, global_emotion=0.2)
 
@@ -57,9 +58,10 @@ def test_window_batch_executor_exception_recovers_state() -> None:
         batch: list[str],
         abort_requested: bool,
         nickname: str | None,
+        source_message_id: str | None,
         _hints: GroupConversationHints,
     ) -> ChatResult:
-        del scope, abort_requested, nickname, _hints
+        del scope, abort_requested, nickname, source_message_id, _hints
         calls.append(batch)
         n["v"] += 1
         if n["v"] == 1:

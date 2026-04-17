@@ -447,6 +447,21 @@ class SQLiteMessageRepo(MessageRepo):
         ).fetchall()
         return [self._to_message(row) for row in reversed(rows)]
 
+    def get_latest_text_by_source_message_id(self, source_message_id: str) -> str:
+        row = self.store.conn.execute(
+            """
+            SELECT raw_content
+            FROM messages
+            WHERE source_message_id = ?
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (source_message_id,),
+        ).fetchone()
+        if not row:
+            return ""
+        return str(row["raw_content"] or "").strip()
+
 
 class SQLiteFactRepo(FactRepo):
     def __init__(self, store: SQLiteStore) -> None:

@@ -7,8 +7,15 @@ from app.domain.conversation_scope import ConversationScope
 
 
 class _StubWindowManager:
-    def process_user_message(self, *, scope: ConversationScope, user_message: str, nickname: str | None = None):
-        del scope, user_message, nickname
+    def process_user_message(
+        self,
+        *,
+        scope: ConversationScope,
+        user_message: str,
+        nickname: str | None = None,
+        source_message_id: str | None = None,
+    ):
+        del scope, user_message, nickname, source_message_id
         return None
 
 
@@ -22,8 +29,8 @@ class _StubWS:
 
 
 class _InspectableOneBotClient(OneBotWSClient):
-    def __init__(self) -> None:
-        super().__init__(_StubWindowManager())
+    def __init__(self, *, reply_message_lookup=None) -> None:
+        super().__init__(_StubWindowManager(), reply_message_lookup=reply_message_lookup)
         self.processed: list[tuple[int, str]] = []
 
     async def _process_message(  # type: ignore[override]
@@ -32,11 +39,12 @@ class _InspectableOneBotClient(OneBotWSClient):
         *,
         scope: ConversationScope,
         user_text: str,
+        source_message_id: str | None = None,
         nickname: str | None = None,
         group_bot_mentioned: bool | None = None,
         group_allow_autonomous: bool | None = None,
     ) -> None:
-        del ws, nickname, group_bot_mentioned, group_allow_autonomous
+        del ws, source_message_id, nickname, group_bot_mentioned, group_allow_autonomous
         self.processed.append((int(scope.actor_user_id), user_text))
 
 
@@ -245,8 +253,15 @@ def test_group_message_when_not_force_whitelist_allows_mentioned_non_whitelist()
 
 def test_private_burst_messages_emit_single_reply() -> None:
     class _BurstWindowManager:
-        def process_user_message(self, *, scope: ConversationScope, user_message: str, nickname: str | None = None):
-            del scope, user_message, nickname
+        def process_user_message(
+            self,
+            *,
+            scope: ConversationScope,
+            user_message: str,
+            nickname: str | None = None,
+            source_message_id: str | None = None,
+        ):
+            del scope, user_message, nickname, source_message_id
             return ChatResult(session_id="s1", reply="合并回复", session_emotion=0.1, global_emotion=0.2)
 
     async def _run() -> tuple[int, int]:
@@ -264,3 +279,132 @@ def test_private_burst_messages_emit_single_reply() -> None:
     sent_count, task_count = asyncio.run(_run())
     assert task_count == 3
     assert sent_count == 1
+
+
+def test_private_known_non_text_segments_are_placeholder_processed() -> None:
+    async def _run() -> list[tuple[int, str]]:
+        client = _InspectableOneBotClient()
+        ws = _StubWS()
+        event = {
+            "post_type": "message",
+            "message_type": "private",
+            "self_id": 3396584245,
+            "user_id": 1377820366,
+            "message_id": 8881,
+            "sender": {"user_id": 1377820366},
+            "message": [
+                {"type": "image", "data": {"file": "a.png"}},
+                {"type": "text", "data": {"text": " 看一下"}},
+            ],
+        }
+        await client._handle_event(ws, event)
+        await asyncio.sleep(0)
+        return client.processed
+
+    assert asyncio.run(_run()) == [(1377820366, "[image: a.png] 看一下")]
+
+
+def test_private_unknown_segments_only_are_skipped() -> None:
+    async def _run() -> list[tuple[int, str]]:
+        client = _InspectableOneBotClient()
+        ws = _StubWS()
+        event = {
+            "post_type": "message",
+            "message_type": "private",
+            "self_id": 3396584245,
+            "user_id": 1377820366,
+            "message_id": 8882,
+            "sender": {"user_id": 1377820366},
+            "message": [
+                {"type": "poke", "data": {"id": "1"}},
+                {"type": "mystery", "data": {"foo": "bar"}},
+            ],
+        }
+        await client._handle_event(ws, event)
+        await asyncio.sleep(0)
+        return client.processed
+
+    assert asyncio.run(_run()) == []
+
+
+def test_reply_segment_with_text_is_processed_as_readable_placeholder() -> None:
+    async def _run() -> list[tuple[int, str]]:
+        client = _InspectableOneBotClient()
+        ws = _StubWS()
+        event = {
+            "post_type": "message",
+            "message_type": "private",
+            "self_id": 3396584245,
+            "user_id": 1377820366,
+            "message_id": 8883,
+            "sender": {"user_id": 1377820366},
+            "message": [
+                {"type": "reply", "data": {"id": "10001", "text": "上一条核心信息"}},
+                {"type": "text", "data": {"text": " 收到"}},
+            ],
+        }
+        await client._handle_event(ws, event)
+        await asyncio.sleep(0)
+        return client.processed
+
+    assert asyncio.run(_run()) == [(1377820366, "[reply: 上一条核心信息] 收到")]
+
+
+def test_reply_segment_can_resolve_cached_message_text_by_id() -> None:
+    async def _run() -> list[tuple[int, str]]:
+        client = _InspectableOneBotClient()
+        ws = _StubWS()
+        first_event = {
+            "post_type": "message",
+            "message_type": "private",
+            "self_id": 3396584245,
+            "user_id": 1377820366,
+            "message_id": 9001,
+            "sender": {"user_id": 1377820366},
+            "message": [{"type": "text", "data": {"text": "你昨晚让我整理的清单"}}],
+        }
+        second_event = {
+            "post_type": "message",
+            "message_type": "private",
+            "self_id": 3396584245,
+            "user_id": 1377820366,
+            "message_id": 9002,
+            "sender": {"user_id": 1377820366},
+            "message": [
+                {"type": "reply", "data": {"id": "9001"}},
+                {"type": "text", "data": {"text": " 我已经改好了"}},
+            ],
+        }
+        await client._handle_event(ws, first_event)
+        await asyncio.sleep(0)
+        await client._handle_event(ws, second_event)
+        await asyncio.sleep(0)
+        return client.processed
+
+    assert asyncio.run(_run()) == [
+        (1377820366, "你昨晚让我整理的清单"),
+        (1377820366, "[reply: 你昨晚让我整理的清单] 我已经改好了"),
+    ]
+
+
+def test_reply_segment_can_resolve_external_lookup_when_cache_miss() -> None:
+    async def _run() -> list[tuple[int, str]]:
+        client = _InspectableOneBotClient(reply_message_lookup=lambda message_id: "数据库里那条消息" if message_id == "777" else "")
+        ws = _StubWS()
+        event = {
+            "post_type": "message",
+            "message_type": "private",
+            "self_id": 3396584245,
+            "user_id": 1377820366,
+            "message_id": 9003,
+            "sender": {"user_id": 1377820366},
+            "message": [
+                {"type": "reply", "data": {"id": "777"}},
+                {"type": "text", "data": {"text": " 我补充一下"}},
+            ],
+        }
+        await client._handle_event(ws, event)
+        await asyncio.sleep(0)
+        return client.processed
+
+    assert asyncio.run(_run()) == [(1377820366, "[reply: 数据库里那条消息] 我补充一下")]

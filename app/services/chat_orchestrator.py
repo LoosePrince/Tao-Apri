@@ -419,6 +419,7 @@ class ChatOrchestrator:
         user_messages: list[str],
         abort_requested: bool,
         nickname: str | None = None,
+        source_message_id: str | None = None,
         group_hints: GroupConversationHints | None = None,
     ) -> ChatResult:
         user_id = scope.actor_user_id
@@ -760,6 +761,7 @@ class ChatOrchestrator:
                 role="user",
                 content=user_message,
                 emotion_score=message_score,
+                source_message_id=source_message_id,
             )
             logger.debug("User message persisted (reply skipped) | user_id=%s | session_id=%s", user_id, session.session_id)
             return ChatResult(
@@ -804,6 +806,7 @@ class ChatOrchestrator:
             role="user",
             content=user_message,
             emotion_score=message_score,
+            source_message_id=source_message_id,
         )
         logger.debug("User message persisted | user_id=%s | session_id=%s", user_id, session.session_id)
 
@@ -814,6 +817,7 @@ class ChatOrchestrator:
             role="assistant",
             content=reply,
             emotion_score=emotion_state.session_emotion,
+            source_message_id=None,
         )
         self.task_queue.submit(
             self._update_user_relation_state,

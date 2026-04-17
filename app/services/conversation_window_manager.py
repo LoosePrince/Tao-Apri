@@ -29,6 +29,7 @@ class WindowState:
     q2: list[str] = field(default_factory=list)
     last_scope: ConversationScope | None = None
     last_nickname: str | None = None
+    last_source_message_id: str | None = None
     group_bot_mentioned_or: bool = False
     group_whitelist_autonomous: bool = False
     silence_deadline: float | None = None
@@ -45,7 +46,9 @@ class ConversationWindowManager:
     def __init__(
         self,
         *,
-        batch_executor: Callable[[ConversationScope, list[str], bool, str | None, GroupConversationHints], ChatResult],
+        batch_executor: Callable[
+            [ConversationScope, list[str], bool, str | None, str | None, GroupConversationHints], ChatResult
+        ],
         metrics: MetricsRegistry,
     ) -> None:
         self.batch_executor = batch_executor
@@ -74,6 +77,7 @@ class ConversationWindowManager:
         scope: ConversationScope,
         user_message: str,
         nickname: str | None = None,
+        source_message_id: str | None = None,
         group_bot_mentioned: bool | None = None,
         group_allow_autonomous: bool | None = None,
     ) -> ChatResult:
@@ -83,6 +87,7 @@ class ConversationWindowManager:
                 scope=scope,
                 user_message=user_message,
                 nickname=nickname,
+                source_message_id=source_message_id,
                 group_bot_mentioned=group_bot_mentioned,
                 group_allow_autonomous=group_allow_autonomous,
             )
@@ -104,6 +109,7 @@ class ConversationWindowManager:
         scope: ConversationScope,
         user_message: str,
         nickname: str | None,
+        source_message_id: str | None,
         group_bot_mentioned: bool | None = None,
         group_allow_autonomous: bool | None = None,
     ) -> ChatResult:
@@ -116,6 +122,8 @@ class ConversationWindowManager:
                 nick = nickname.strip()
                 if nick:
                     state.last_nickname = nick
+            if source_message_id and source_message_id.strip():
+                state.last_source_message_id = source_message_id.strip()
             if scope.scene_type == "group":
                 if group_bot_mentioned is not None:
                     state.group_bot_mentioned_or |= bool(group_bot_mentioned)
@@ -279,6 +287,7 @@ class ConversationWindowManager:
             state.mode = "RESPONDING"
             abort_requested = state.abort_requested
             nickname_for_batch = state.last_nickname
+            source_message_id_for_batch = state.last_source_message_id
             scope_for_batch = state.last_scope
 
         def _fallback_timeout_result() -> ChatResult:
@@ -304,7 +313,12 @@ class ConversationWindowManager:
                     if scope_for_batch is None:
                         raise RuntimeError("Missing ConversationScope for batch execution")
                     holder["result"] = self.batch_executor(
-                        scope_for_batch, batch, abort_requested, nickname_for_batch, group_hints
+                        scope_for_batch,
+                        batch,
+                        abort_requested,
+                        nickname_for_batch,
+                        source_message_id_for_batch,
+                        group_hints,
                     )
                 except Exception as exc:  # pragma: no cover
                     holder["result"] = exc

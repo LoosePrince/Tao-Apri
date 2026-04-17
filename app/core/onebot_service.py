@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, Callable
 
 from app.integrations.onebot_ws_client import OneBotWSClient
 
@@ -15,11 +15,11 @@ class OneBotService:
         self._client: OneBotWSClient | None = None
         self._lock = asyncio.Lock()
 
-    async def start(self, *, window_manager: Any) -> None:
+    async def start(self, *, window_manager: Any, reply_message_lookup: Callable[[str], str] | None = None) -> None:
         async with self._lock:
             if self._client is not None:
                 return
-            self._client = OneBotWSClient(window_manager)
+            self._client = OneBotWSClient(window_manager, reply_message_lookup=reply_message_lookup)
             await self._client.start()
 
     async def stop(self) -> None:
@@ -29,10 +29,10 @@ class OneBotService:
             await self._client.stop()
             self._client = None
 
-    async def restart(self, *, window_manager: Any) -> None:
+    async def restart(self, *, window_manager: Any, reply_message_lookup: Callable[[str], str] | None = None) -> None:
         async with self._lock:
             if self._client is not None:
                 await self._client.stop()
-            self._client = OneBotWSClient(window_manager)
+            self._client = OneBotWSClient(window_manager, reply_message_lookup=reply_message_lookup)
             await self._client.start()
 

@@ -71,6 +71,15 @@ class InMemoryMessageRepo(MessageRepo):
     def list_all(self, limit: int = 200) -> list[Message]:
         return self._messages[-limit:]
 
+    def get_latest_text_by_source_message_id(self, source_message_id: str) -> str:
+        key = (source_message_id or "").strip()
+        if not key:
+            return ""
+        for message in reversed(self._messages):
+            if (message.source_message_id or "").strip() == key:
+                return message.raw_content.strip()
+        return ""
+
 
 class InMemoryVectorRepo(VectorRepo):
     def __init__(self) -> None:
