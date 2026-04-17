@@ -46,3 +46,58 @@ def test_image_understanding_vision_only_uses_vision_result() -> None:
         settings.image_understanding.enabled = old_image_enabled
         settings.ocr.enabled = old_ocr_enabled
         settings.vision.enabled = old_vision_enabled
+
+
+def test_image_understanding_merge_strategy_and_prefer_order_take_effect() -> None:
+    old_image_enabled = settings.image_understanding.enabled
+    old_ocr_enabled = settings.ocr.enabled
+    old_vision_enabled = settings.vision.enabled
+    old_strategy = settings.image_understanding.merge_strategy
+    old_prefer = settings.image_understanding.prefer_ocr_first
+    settings.image_understanding.enabled = True
+    settings.ocr.enabled = True
+    settings.vision.enabled = True
+    settings.image_understanding.merge_strategy = "ocr_plus_vision"
+    settings.image_understanding.prefer_ocr_first = False
+    try:
+        service = ImageUnderstandingService(llm_client=_StubLLMClient())  # type: ignore[arg-type]
+
+        def _fake_read_image_bytes(item, *, max_mb, timeout_seconds):  # noqa: ANN001
+            del item, max_mb, timeout_seconds
+            return b"fake", "http://example.com/x.png", "image/png"
+
+        service._read_image_bytes = _fake_read_image_bytes  # type: ignore[method-assign]
+        service._run_ocr = lambda image_bytes, mime_type: "OCR文本"  # type: ignore[method-assign]
+        result = service.analyze_attachments([{"type": "image", "data": {"url": "http://example.com/x.png"}}])
+        assert result.merged_summary.startswith("视觉识别：")
+    finally:
+        settings.image_understanding.enabled = old_image_enabled
+        settings.ocr.enabled = old_ocr_enabled
+        settings.vision.enabled = old_vision_enabled
+        settings.image_understanding.merge_strategy = old_strategy
+        settings.image_understanding.prefer_ocr_first = old_prefer
+
+
+def test_image_understanding_unknown_ocr_engine_skips_ocr() -> None:
+    old_image_enabled = settings.image_understanding.enabled
+    old_ocr_enabled = settings.ocr.enabled
+    old_vision_enabled = settings.vision.enabled
+    old_engine = settings.ocr.engine
+    settings.image_understanding.enabled = True
+    settings.ocr.enabled = True
+    settings.vision.enabled = False
+    settings.ocr.engine = "unsupported_engine"
+    try:
+        service = ImageUnderstandingService(llm_client=_StubLLMClient())  # type: ignore[arg-type]
+        service._read_image_bytes = lambda item, *, max_mb, timeout_seconds: (  # type: ignore[method-assign]
+            b"fake",
+            "http://example.com/x.png",
+            "image/png",
+        )
+        result = service.analyze_attachments([{"type": "image", "data": {"url": "http://example.com/x.png"}}])
+        assert result.ocr_text == ""
+    finally:
+        settings.image_understanding.enabled = old_image_enabled
+        settings.ocr.enabled = old_ocr_enabled
+        settings.vision.enabled = old_vision_enabled
+        settings.ocr.engine = old_engine

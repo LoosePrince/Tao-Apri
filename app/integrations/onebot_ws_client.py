@@ -115,6 +115,12 @@ def _extract_attachments_from_array_message(message: Any) -> list[dict[str, obje
             items.append({"type": seg_type, "data": data})
     return items
 
+
+def _extract_text_from_string_message(message: Any) -> str:
+    if isinstance(message, str):
+        return message.strip()
+    return ""
+
 def _is_mentioned_in_array_message(message: Any, *, self_id: int) -> bool:
     if not isinstance(message, list):
         return False
@@ -406,11 +412,16 @@ class OneBotWSClient:
             return
 
         message_payload = event.get("message")
-        attachments = _extract_attachments_from_array_message(message_payload)
-        user_text = _extract_text_from_array_message(
-            message_payload,
-            reply_text_resolver=self._resolve_reply_text,
-        )
+        message_format = str(settings.onebot.message_format or "array").strip().lower()
+        if message_format == "string":
+            attachments = []
+            user_text = _extract_text_from_string_message(message_payload)
+        else:
+            attachments = _extract_attachments_from_array_message(message_payload)
+            user_text = _extract_text_from_array_message(
+                message_payload,
+                reply_text_resolver=self._resolve_reply_text,
+            )
         if not user_text:
             logger.debug("Skip empty text message payload=%s", message_payload)
             return

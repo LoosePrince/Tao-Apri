@@ -107,6 +107,7 @@ class SQLiteStore:
             CREATE TABLE IF NOT EXISTS vector_index (
                 message_id TEXT PRIMARY KEY,
                 user_id TEXT NOT NULL,
+                collection TEXT NOT NULL DEFAULT '',
                 related_user_ids TEXT NOT NULL,
                 sanitized_content TEXT NOT NULL,
                 embedding TEXT NOT NULL,
@@ -221,6 +222,12 @@ class SQLiteStore:
             self.conn.execute("ALTER TABLE vector_index ADD COLUMN group_id TEXT NULL")
         if "platform" not in vector_cols:
             self.conn.execute("ALTER TABLE vector_index ADD COLUMN platform TEXT NOT NULL DEFAULT ''")
+        if "collection" not in vector_cols:
+            self.conn.execute("ALTER TABLE vector_index ADD COLUMN collection TEXT NOT NULL DEFAULT ''")
+        self.conn.execute(
+            "UPDATE vector_index SET collection = ? WHERE collection = ''",
+            (settings.storage.vector_collection,),
+        )
         self.conn.execute(
             """
             UPDATE vector_index
@@ -523,13 +530,14 @@ class SQLiteVectorRepo(VectorRepo):
         self.store.conn.execute(
             """
             INSERT INTO vector_index (
-                message_id, user_id, related_user_ids, sanitized_content, embedding, created_at, time_bucket,
+                message_id, user_id, collection, related_user_ids, sanitized_content, embedding, created_at, time_bucket,
                 scope_id, scene_type, group_id, platform,
                 heat_score, access_count, last_accessed_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(message_id) DO UPDATE SET
                 user_id = excluded.user_id,
+                collection = excluded.collection,
                 related_user_ids = excluded.related_user_ids,
                 sanitized_content = excluded.sanitized_content,
                 embedding = excluded.embedding,
@@ -543,6 +551,7 @@ class SQLiteVectorRepo(VectorRepo):
             (
                 message.message_id,
                 message.user_id,
+                settings.storage.vector_collection,
                 json.dumps(message.related_user_ids, ensure_ascii=False),
                 message.sanitized_content,
                 json.dumps(vec),
@@ -578,7 +587,10 @@ class SQLiteVectorRepo(VectorRepo):
                 v.embedding, v.created_at as v_created_at, v.heat_score, v.access_count, v.last_accessed_at
             FROM vector_index v
             JOIN messages m ON m.message_id = v.message_id
+            WHERE v.collection = ?
             """
+            ,
+            (settings.storage.vector_collection,),
         ).fetchall()
         scored: list[tuple[float, Message, float]] = []
         for row in rows:

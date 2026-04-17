@@ -425,3 +425,28 @@ def test_extract_attachments_from_array_message_keeps_supported_media_segments()
         {"type": "image", "data": {"url": "http://example.com/a.png"}},
         {"type": "file", "data": {"name": "doc.txt"}},
     ]
+
+
+def test_onebot_message_format_string_uses_raw_text_only() -> None:
+    old_format = settings.onebot.message_format
+    settings.onebot.message_format = "string"
+    try:
+        async def _run() -> list[tuple[int, str]]:
+            client = _InspectableOneBotClient()
+            ws = _StubWS()
+            event = {
+                "post_type": "message",
+                "message_type": "private",
+                "self_id": 3396584245,
+                "user_id": 1377820366,
+                "message_id": 9010,
+                "sender": {"user_id": 1377820366},
+                "message": "这是纯字符串消息",
+            }
+            await client._handle_event(ws, event)
+            await asyncio.sleep(0)
+            return client.processed
+
+        assert asyncio.run(_run()) == [(1377820366, "这是纯字符串消息")]
+    finally:
+        settings.onebot.message_format = old_format

@@ -43,11 +43,33 @@ class ImageUnderstandingService:
 
     @staticmethod
     def _merge_texts(ocr_text: str, vision_text: str) -> str:
-        pieces: list[str] = []
-        if ocr_text.strip():
-            pieces.append(f"OCR识别：{ocr_text.strip()}")
-        if vision_text.strip():
-            pieces.append(f"视觉识别：{vision_text.strip()}")
+        strategy = str(settings.image_understanding.merge_strategy or "ocr_plus_vision").strip().lower()
+        ocr = ocr_text.strip()
+        vision = vision_text.strip()
+        if strategy == "ocr_only":
+            return f"OCR识别：{ocr}" if ocr else ""
+        if strategy == "vision_only":
+            return f"视觉识别：{vision}" if vision else ""
+        if strategy == "vision_plus_ocr":
+            pieces: list[str] = []
+            if vision:
+                pieces.append(f"视觉识别：{vision}")
+            if ocr:
+                pieces.append(f"OCR识别：{ocr}")
+            return "\n".join(pieces).strip()
+        # Default: ocr_plus_vision; allow prefer_ocr_first override.
+        prefer_ocr_first = bool(settings.image_understanding.prefer_ocr_first)
+        pieces = []
+        if prefer_ocr_first:
+            if ocr:
+                pieces.append(f"OCR识别：{ocr}")
+            if vision:
+                pieces.append(f"视觉识别：{vision}")
+        else:
+            if vision:
+                pieces.append(f"视觉识别：{vision}")
+            if ocr:
+                pieces.append(f"OCR识别：{ocr}")
         return "\n".join(pieces).strip()
 
     @staticmethod
@@ -56,6 +78,9 @@ class ImageUnderstandingService:
         return content[:limit]
 
     def _get_rapid_ocr(self) -> Any | None:
+        engine = str(settings.ocr.engine or "rapidocr").strip().lower()
+        if engine not in {"rapidocr", "rapidocr_onnxruntime"}:
+            return None
         if self._rapid_ocr_engine is not None:
             return self._rapid_ocr_engine
         try:

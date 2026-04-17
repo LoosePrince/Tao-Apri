@@ -1,3 +1,6 @@
+from urllib.parse import urlparse
+from typing import TYPE_CHECKING
+
 from app.core.config import settings
 from app.core.metrics import MetricsRegistry
 from app.domain.services.emotion_engine import EmotionEngine
@@ -7,6 +10,7 @@ from app.domain.services.persona_engine import PersonaEngine
 from app.jobs.emotion_aggregator import EmotionAggregatorJob
 from app.jobs.periodic_scheduler import PeriodicScheduler
 from app.jobs.task_queue import TaskQueue
+from app.repos.in_memory import InMemoryVectorRepo
 from app.repos.sqlite_repo import (
     SQLiteEmotionStateRepo,
     SQLiteFactRepo,
@@ -27,18 +31,39 @@ from app.services.prompt_composer import PromptComposer
 from app.services.window_preprocessor import WindowPreprocessor
 from app.domain.conversation_scope import ConversationScope
 
+if TYPE_CHECKING:
+    from app.core.config import Settings
+
 
 class Container:
+    @staticmethod
+    def _resolve_sqlite_db_path() -> str:
+        sqlite_path = (settings.storage.sqlite_db_path or "").strip()
+        if sqlite_path and sqlite_path != "social_persona_ai.db":
+            return sqlite_path
+        postgres_dsn = (settings.storage.postgres_dsn or "").strip()
+        if not postgres_dsn:
+            return sqlite_path or "social_persona_ai.db"
+        parsed = urlparse(postgres_dsn)
+        db_name = (parsed.path or "").strip("/ ")
+        if db_name:
+            return f"{db_name}.db"
+        return sqlite_path or "social_persona_ai.db"
+
     def __init__(self) -> None:
         import threading
 
         self._lock = threading.RLock()
-        self.store = SQLiteStore(settings.storage.sqlite_db_path)
+        self.store = SQLiteStore(self._resolve_sqlite_db_path())
         self.user_repo = SQLiteUserRepo(self.store)
         self.session_repo = SQLiteSessionRepo(self.store)
         self.message_repo = SQLiteMessageRepo(self.store)
         self.fact_repo = SQLiteFactRepo(self.store)
-        self.vector_repo = SQLiteVectorRepo(self.store)
+        vector_dsn = (settings.storage.vector_dsn or "").strip().lower()
+        if vector_dsn.startswith("memory://"):
+            self.vector_repo = InMemoryVectorRepo()
+        else:
+            self.vector_repo = SQLiteVectorRepo(self.store)
         self.emotion_state_repo = SQLiteEmotionStateRepo(self.store)
         self.relation_repo = SQLiteRelationRepo(self.store)
         self.preference_repo = SQLitePreferenceRepo(self.store)

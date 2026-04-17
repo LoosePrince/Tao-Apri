@@ -2,6 +2,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from uuid import uuid4
 
+from app.core.config import settings
 from app.domain.models import MemoryFact, Message, Session, User
 from app.repos.interfaces import FactRepo, MessageRepo, SessionRepo, UserRepo, VectorRepo
 
@@ -85,10 +86,12 @@ class InMemoryVectorRepo(VectorRepo):
     def __init__(self) -> None:
         self._memories: list[Message] = []
         self._heat: dict[str, float] = {}
+        self._collection_by_message_id: dict[str, str] = {}
 
     def add_memory(self, message: Message) -> None:
         self._memories.append(message)
         self._heat[message.message_id] = 0.0
+        self._collection_by_message_id[message.message_id] = settings.storage.vector_collection
 
     def search(
         self,
@@ -100,6 +103,8 @@ class InMemoryVectorRepo(VectorRepo):
     ) -> list[Message]:
         scored: list[tuple[float, Message]] = []
         for memory in self._memories:
+            if self._collection_by_message_id.get(memory.message_id, "") != settings.storage.vector_collection:
+                continue
             # Prefer current user + related memories, but keep non-isolated option.
             is_related = memory.user_id == user_id or user_id in memory.related_user_ids
             base_score = _jaccard_score(query, memory.sanitized_content)

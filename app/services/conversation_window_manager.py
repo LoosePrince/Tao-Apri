@@ -164,15 +164,25 @@ class ConversationWindowManager:
             else:
                 state.q1.append(user_message)
                 target_round = state.completed_round + 1
-                # Hard limit so that: (silence delay) + (max_think_seconds) <= wait_timeout_seconds,
+                # Hard limit so that: (silence delay) + (batch execution budget) <= wait_timeout_seconds,
                 # otherwise the waiter may time out before the batch thread has a chance to set result.
                 base_deadline = max(
                     now + settings.rhythm.silence_seconds,
                     state.cooldown_until + settings.rhythm.silence_seconds,
                 )
+                if settings.rhythm.enable_max_think_seconds:
+                    execution_budget = settings.rhythm.max_think_seconds
+                else:
+                    execution_budget = max(
+                        1.0,
+                        settings.rhythm.wait_timeout_seconds
+                        - settings.rhythm.silence_seconds
+                        - settings.rhythm.cooldown_seconds
+                        - 0.5,
+                    )
                 hard_limit = now + max(
                     0.0,
-                    settings.rhythm.wait_timeout_seconds - settings.rhythm.max_think_seconds - 0.5,
+                    settings.rhythm.wait_timeout_seconds - execution_budget - 0.5,
                 )
                 state.silence_deadline = min(base_deadline, hard_limit)
                 if not state.batch_scheduled:
@@ -320,7 +330,6 @@ class ConversationWindowManager:
         try:
             # Always execute batch in a background thread to avoid blocking longer than
             # `process_user_message`'s `wait_timeout_seconds` when downstream (LLM/IO) is slow.
-            # We still respect `max_think_seconds` as the hard upper bound for producing a result.
             holder: dict[str, ChatResult | Exception | None] = {"result": None}
             finished = threading.Event()
 
@@ -348,7 +357,18 @@ class ConversationWindowManager:
                 daemon=True,
             ).start()
 
-            if not finished.wait(timeout=settings.rhythm.max_think_seconds):
+            if settings.rhythm.enable_max_think_seconds:
+                batch_timeout = settings.rhythm.max_think_seconds
+            else:
+                batch_timeout = max(
+                    1.0,
+                    settings.rhythm.wait_timeout_seconds
+                    - settings.rhythm.silence_seconds
+                    - settings.rhythm.cooldown_seconds
+                    - 0.5,
+                )
+
+            if not finished.wait(timeout=batch_timeout):
                 self.metrics.inc("max_think_timeout_count")
                 result = _fallback_timeout_result()
             else:
