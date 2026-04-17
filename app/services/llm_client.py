@@ -42,6 +42,16 @@ class ShouldReplyDecision:
     reason: str = ""
 
 
+@dataclass(slots=True)
+class UnifiedDecision:
+    should_reply: bool
+    skip_reason: str
+    reply: str
+    profile_update: dict[str, object]
+    relation_update: dict[str, object]
+    retrieval_plan: RetrievalPlan
+
+
 class LLMClient:
     def __init__(self) -> None:
         self._client: OpenAI | None = None
@@ -108,6 +118,18 @@ class LLMClient:
             start_idx = stripped.find("{", start_idx + 1)
 
         return {}
+
+    @staticmethod
+    def _coerce_bool(value: object, default: bool = True) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"true", "1", "yes", "y", "on"}:
+                return True
+            if normalized in {"false", "0", "no", "n", "off"}:
+                return False
+        return default
 
     def _call_json_decider(self, *, system_asset: str, user_asset: str, values: dict[str, object]) -> dict[str, object]:
         provider = settings.llm.provider.lower().strip()
@@ -249,20 +271,8 @@ class LLMClient:
             },
         )
 
-        def _coerce_bool(value: object) -> bool:
-            if isinstance(value, bool):
-                return value
-            if isinstance(value, str):
-                normalized = value.strip().lower()
-                if normalized in {"true", "1", "yes", "y", "on"}:
-                    return True
-                if normalized in {"false", "0", "no", "n", "off"}:
-                    return False
-            # 保底：倾向回复（不沉默）
-            return True
-
         raw_should_reply = data.get("should_reply", True) if isinstance(data, dict) else True
-        should_reply = _coerce_bool(raw_should_reply)
+        should_reply = self._coerce_bool(raw_should_reply, default=True)
 
         reason = str(data.get("reason", "")).strip() if isinstance(data, dict) else ""
         if not reason:
@@ -301,6 +311,108 @@ class LLMClient:
         if summary:
             return summary
         return "\n".join(f"- {item}" for item in messages[:8])
+
+    def generate_unified_decision(
+        self,
+        *,
+        prompt_context: PromptContext,
+        user_message: str,
+        relation_json: str,
+        profile_json: str,
+        session_emotion: float,
+        global_emotion: float,
+        memory_count: int,
+        current_hour: int,
+        current_date: str,
+        current_year: int,
+        scene_type: str = "private",
+        group_bot_mentioned: bool = False,
+        group_allow_autonomous: bool = False,
+        include_notice: bool = True,
+    ) -> UnifiedDecision:
+        provider = settings.llm.provider.lower().strip()
+        if provider != "kilo" or not settings.llm.api_key or self._is_circuit_open():
+            return UnifiedDecision(
+                should_reply=True,
+                skip_reason="fallback:provider_or_circuit",
+                reply="",
+                profile_update={},
+                relation_update={},
+                retrieval_plan=RetrievalPlan(should_retrieve=True, queries=[user_message], reason="fallback"),
+            )
+
+        system_prompt = read_required_markdown_asset("prompt/ai_unified_decision_system.md")
+        user_template = read_required_markdown_asset("prompt/ai_unified_decision_user.md")
+        unified_system_context = self._build_system_prompt(prompt_context, include_notice=include_notice)
+        user_prompt = self._render_template(
+            user_template,
+            {
+                "user_message": user_message,
+                "unified_system_context": unified_system_context,
+                "relation_json": relation_json,
+                "profile_json": profile_json,
+                "scene_type": scene_type,
+                "group_bot_mentioned": str(group_bot_mentioned).lower(),
+                "group_allow_autonomous": str(group_allow_autonomous).lower(),
+                "session_emotion": f"{session_emotion:.4f}",
+                "global_emotion": f"{global_emotion:.4f}",
+                "memory_count": str(memory_count),
+                "current_hour": str(current_hour),
+                "current_date": current_date,
+                "current_year": str(current_year),
+            },
+        )
+        client = self._get_client()
+        try:
+            response = client.chat.completions.create(
+                model=settings.llm.model,
+                temperature=0,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+            )
+            content = response.choices[0].message.content if response.choices else ""
+            self._on_request_success()
+            data = self._extract_json(content or "")
+        except Exception as exc:
+            self._on_request_failure(exc)
+            logger.warning("Unified decision call failed | err=%s", exc)
+            data = {}
+
+        should_reply = self._coerce_bool(data.get("should_reply", True), default=True)
+        skip_reason = str(data.get("skip_reason", "")).strip()
+        reply = str(data.get("reply", "")).strip()
+        if not should_reply:
+            reply = ""
+            if not skip_reason:
+                skip_reason = "skip:unified_should_reply_false"
+        profile_update = data.get("profile_update", {})
+        if not isinstance(profile_update, dict):
+            profile_update = {}
+        relation_update = data.get("relation_update", {})
+        if not isinstance(relation_update, dict):
+            relation_update = {}
+        retrieval_data = data.get("retrieval_plan", {})
+        if not isinstance(retrieval_data, dict):
+            retrieval_data = {}
+        raw_queries = retrieval_data.get("queries", [])
+        queries = [str(item).strip() for item in (raw_queries if isinstance(raw_queries, list) else []) if str(item).strip()][:3]
+        if not queries:
+            queries = [user_message]
+        retrieval_plan = RetrievalPlan(
+            should_retrieve=self._coerce_bool(retrieval_data.get("should_retrieve", True), default=True),
+            queries=queries,
+            reason=str(retrieval_data.get("reason", "")).strip(),
+        )
+        return UnifiedDecision(
+            should_reply=should_reply,
+            skip_reason=skip_reason,
+            reply=reply,
+            profile_update=profile_update,
+            relation_update=relation_update,
+            retrieval_plan=retrieval_plan,
+        )
 
     def generate_reply(
         self,

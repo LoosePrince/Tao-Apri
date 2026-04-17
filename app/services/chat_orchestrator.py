@@ -263,7 +263,14 @@ class ChatOrchestrator:
                 )
         return None
 
-    def _update_user_relation_state(self, *, user_id: str, user_message: str, reply: str) -> None:
+    def _update_user_relation_state(
+        self,
+        *,
+        user_id: str,
+        user_message: str,
+        reply: str,
+        relation_update: dict[str, object] | None = None,
+    ) -> None:
         relation = self.relation_repo.get(user_id, ASSISTANT_RELATION_ID) or UserRelation(
             source_user_id=user_id,
             target_user_id=ASSISTANT_RELATION_ID,
@@ -281,7 +288,7 @@ class ChatOrchestrator:
             relation_json = json.dumps(payload, ensure_ascii=False)
         else:
             relation_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-        decision = self.llm_client.evolve_relation_decision(
+        decision = relation_update or self.llm_client.evolve_relation_decision(
             relation_json=relation_json,
             user_message=user_message,
             reply=reply,
@@ -463,38 +470,16 @@ class ChatOrchestrator:
         if preflight is not None:
             return preflight
 
-        (
-            profile_summary_generated,
-            preference_summary_generated,
-            preferred_address_generated,
-            tone_preference_generated,
-            schedule_state_generated,
-            fatigue_level_generated,
-            emotion_peak_generated,
-        ) = self._build_profile_summary(
-            user_id=user_id,
-            session_emotion=emotion_state.session_emotion,
-            global_emotion=emotion_state.global_emotion,
-            current_hour=now.hour,
-            current_date=now.date().isoformat(),
-            current_year=now.year,
-            pending_user_text=user_message,
-        )
-        if profile_summary_generated:
-            generated_profile = UserProfile(
-                user_id=user_id,
-                profile_summary=profile_summary_generated,
-                preference_summary=preference_summary_generated,
-                preferred_address=preferred_address_generated,
-                tone_preference=tone_preference_generated,
-                schedule_state=schedule_state_generated,
-                fatigue_level=fatigue_level_generated,
-                emotion_peak_level=emotion_peak_generated,
-            )
-            self.task_queue.submit(self._persist_profile, generated_profile)
-            logger.info(
-                "Profile updated | user_id=%s | profile_summary=%s | preference_summary=%s | preferred_address=%s | tone_preference=%s | schedule_state=%s | fatigue_level=%.3f | emotion_peak=%.3f",
-                user_id,
+        profile_summary_generated = ""
+        preference_summary_generated = ""
+        preferred_address_generated = ""
+        tone_preference_generated = ""
+        schedule_state_generated = ""
+        fatigue_level_generated = 0.0
+        emotion_peak_generated = 0.0
+        unified_decider = getattr(self.llm_client, "generate_unified_decision", None)
+        if not callable(unified_decider):
+            (
                 profile_summary_generated,
                 preference_summary_generated,
                 preferred_address_generated,
@@ -502,7 +487,27 @@ class ChatOrchestrator:
                 schedule_state_generated,
                 fatigue_level_generated,
                 emotion_peak_generated,
+            ) = self._build_profile_summary(
+                user_id=user_id,
+                session_emotion=emotion_state.session_emotion,
+                global_emotion=emotion_state.global_emotion,
+                current_hour=now.hour,
+                current_date=now.date().isoformat(),
+                current_year=now.year,
+                pending_user_text=user_message,
             )
+            if profile_summary_generated:
+                generated_profile = UserProfile(
+                    user_id=user_id,
+                    profile_summary=profile_summary_generated,
+                    preference_summary=preference_summary_generated,
+                    preferred_address=preferred_address_generated,
+                    tone_preference=tone_preference_generated,
+                    schedule_state=schedule_state_generated,
+                    fatigue_level=fatigue_level_generated,
+                    emotion_peak_level=emotion_peak_generated,
+                )
+                self.task_queue.submit(self._persist_profile, generated_profile)
 
         retrieval_plan = None
         retrieval_round = 0
@@ -609,10 +614,6 @@ class ChatOrchestrator:
             profile_summary = "\n".join(part for part in profile_parts if part)
         group_emotion_avg, group_emotion_text = self._build_group_emotion_context(viewer_user_id=user_id)
         profile_summary = (profile_summary + "\n" + group_emotion_text).strip() if profile_summary else group_emotion_text
-        # Decide policy inputs: prefer stored profile fatigue/emotion_peak when available,
-        # otherwise fall back to generated profile values.
-        fatigue_level_for_decider = profile.fatigue_level if profile else fatigue_level_generated
-        emotion_peak_level_for_decider = profile.emotion_peak_level if profile else emotion_peak_generated
         logger.debug(
             "Profile selected for prompt | user_id=%s | has_profile=%s | profile_len=%s",
             user_id,
@@ -650,16 +651,45 @@ class ChatOrchestrator:
             len(prompt_ctx.memory_context),
         )
 
-        should_reply_decider = getattr(self.llm_client, "decide_should_reply", None)
+        relation = self.relation_repo.get(user_id, ASSISTANT_RELATION_ID) or UserRelation(
+            source_user_id=user_id,
+            target_user_id=ASSISTANT_RELATION_ID,
+        )
+        relation_payload = {
+            "polarity": relation.polarity,
+            "strength": relation.strength,
+            "trust_score": relation.trust_score,
+            "intimacy_score": relation.intimacy_score,
+            "dependency_score": relation.dependency_score,
+        }
+        if abs(relation.strength) <= 1e-12:
+            relation_json = json.dumps(relation_payload, ensure_ascii=False)
+        else:
+            relation_json = json.dumps(relation_payload, ensure_ascii=False, separators=(",", ":"))
+        profile_payload = {
+            "profile_summary": profile.profile_summary if profile else "",
+            "preference_summary": profile.preference_summary if profile else "",
+            "preferred_address": profile.preferred_address if profile else "",
+            "tone_preference": profile.tone_preference if profile else "",
+            "schedule_state": profile.schedule_state if profile else "",
+            "fatigue_level": profile.fatigue_level if profile else fatigue_level_generated,
+            "emotion_peak_level": profile.emotion_peak_level if profile else emotion_peak_generated,
+        }
+        profile_json = json.dumps(profile_payload, ensure_ascii=False)
+
         should_reply = True
         skip_reason = ""
-        if callable(should_reply_decider):
-            decision = should_reply_decider(
+        reply = ""
+        relation_update: dict[str, object] = {}
+        profile_update: dict[str, object] = {}
+        if callable(unified_decider):
+            unified = unified_decider(
+                prompt_context=prompt_ctx,
                 user_message=user_message,
+                relation_json=relation_json,
+                profile_json=profile_json,
                 session_emotion=emotion_state.session_emotion,
                 global_emotion=emotion_state.global_emotion,
-                fatigue_level=fatigue_level_for_decider,
-                emotion_peak_level=emotion_peak_level_for_decider,
                 memory_count=len(memories),
                 current_hour=now.hour,
                 current_date=now.date().isoformat(),
@@ -667,13 +697,51 @@ class ChatOrchestrator:
                 scene_type=scope.scene_type,
                 group_bot_mentioned=gh.bot_mentioned,
                 group_allow_autonomous=gh.allow_autonomous_without_mention,
+                include_notice=session.turn_count == 0 and settings.persona.policy_notice_on_first_turn,
             )
-            if isinstance(decision, dict):
-                should_reply = bool(decision.get("should_reply", True))
-                skip_reason = str(decision.get("reason", "")).strip()
-            else:
-                should_reply = bool(getattr(decision, "should_reply", True))
-                skip_reason = str(getattr(decision, "reason", "")).strip()
+            should_reply = bool(getattr(unified, "should_reply", True))
+            skip_reason = str(getattr(unified, "skip_reason", "")).strip()
+            reply = str(getattr(unified, "reply", "")).strip()
+            relation_update = getattr(unified, "relation_update", {}) or {}
+            profile_update = getattr(unified, "profile_update", {}) or {}
+        else:
+            should_reply_decider = getattr(self.llm_client, "decide_should_reply", None)
+            if callable(should_reply_decider):
+                decision = should_reply_decider(
+                    user_message=user_message,
+                    session_emotion=emotion_state.session_emotion,
+                    global_emotion=emotion_state.global_emotion,
+                    fatigue_level=profile_payload.get("fatigue_level", 0.0) or 0.0,
+                    emotion_peak_level=profile_payload.get("emotion_peak_level", 0.0) or 0.0,
+                    memory_count=len(memories),
+                    current_hour=now.hour,
+                    current_date=now.date().isoformat(),
+                    current_year=now.year,
+                    scene_type=scope.scene_type,
+                    group_bot_mentioned=gh.bot_mentioned,
+                    group_allow_autonomous=gh.allow_autonomous_without_mention,
+                )
+                if isinstance(decision, dict):
+                    should_reply = bool(decision.get("should_reply", True))
+                    skip_reason = str(decision.get("reason", "")).strip()
+                else:
+                    should_reply = bool(getattr(decision, "should_reply", True))
+                    skip_reason = str(getattr(decision, "reason", "")).strip()
+
+        if profile_update:
+            generated_profile = UserProfile(
+                user_id=user_id,
+                profile_summary=str(profile_update.get("profile_summary", profile_summary_generated or "近期表达仍在观察中。")).strip(),
+                preference_summary=str(profile_update.get("preference_summary", preference_summary_generated or "偏好信息有限，建议继续观察。")).strip(),
+                preferred_address=str(profile_update.get("preferred_address", preferred_address_generated)).strip()[:12],
+                tone_preference=str(profile_update.get("tone_preference", tone_preference_generated or "自然中性")).strip(),
+                schedule_state=str(profile_update.get("schedule_state", schedule_state_generated or "常规节奏")).strip(),
+                fatigue_level=self._clamp01(float(profile_update.get("fatigue_level", fatigue_level_generated) or fatigue_level_generated)),
+                emotion_peak_level=self._clamp01(
+                    float(profile_update.get("emotion_peak_level", emotion_peak_generated) or emotion_peak_generated)
+                ),
+            )
+            self.task_queue.submit(self._persist_profile, generated_profile)
 
         if not should_reply:
             if not skip_reason:
@@ -700,14 +768,14 @@ class ChatOrchestrator:
                 session_emotion=emotion_state.session_emotion,
                 global_emotion=emotion_state.global_emotion,
             )
-
-        reply = self.llm_client.generate_reply(
-            prompt_context=prompt_ctx,
-            memory_count=len(memories),
-            session_emotion=emotion_state.session_emotion,
-            global_emotion=emotion_state.global_emotion,
-            include_notice=session.turn_count == 0 and settings.persona.policy_notice_on_first_turn,
-        )
+        if not reply:
+            reply = self.llm_client.generate_reply(
+                prompt_context=prompt_ctx,
+                memory_count=len(memories),
+                session_emotion=emotion_state.session_emotion,
+                global_emotion=emotion_state.global_emotion,
+                include_notice=session.turn_count == 0 and settings.persona.policy_notice_on_first_turn,
+            )
         logger.info("LLM reply generated | user_id=%s | reply_len=%s", user_id, len(reply))
         logger.debug("LLM reply text | user_id=%s | reply=%s", user_id, reply)
 
@@ -752,6 +820,7 @@ class ChatOrchestrator:
             user_id=user_id,
             user_message=raw_user_message or user_message,
             reply=reply,
+            relation_update=relation_update,
         )
         logger.debug("Assistant message persisted | user_id=%s | session_id=%s", user_id, session.session_id)
 

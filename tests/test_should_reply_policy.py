@@ -22,7 +22,7 @@ from app.repos.sqlite_repo import (
     SQLiteVectorRepo,
 )
 from app.services.chat_orchestrator import ChatOrchestrator
-from app.services.llm_client import RetrievalPlan
+from app.services.llm_client import RetrievalPlan, UnifiedDecision
 from app.services.prompt_composer import PromptComposer
 from app.services.window_preprocessor import WindowPreprocessor
 import pytest
@@ -87,6 +87,17 @@ class _ShouldReplyFalseLLMClient:
 
     def decide_should_reply(self, **kwargs) -> _ShouldReplyDecision:  # noqa: ANN003
         return _ShouldReplyDecision(should_reply=False, reason="test_policy_no_reply")
+
+    def generate_unified_decision(self, **kwargs) -> UnifiedDecision:  # noqa: ANN003
+        user_message = kwargs["user_message"]
+        return UnifiedDecision(
+            should_reply=False,
+            skip_reason="test_policy_no_reply",
+            reply="",
+            profile_update={},
+            relation_update={},
+            retrieval_plan=RetrievalPlan(should_retrieve=True, queries=[user_message], reason="test"),
+        )
 
 
 def _build_orchestrator(db_path: str):  # noqa: ANN001

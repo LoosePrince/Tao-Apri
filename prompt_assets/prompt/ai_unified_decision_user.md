@@ -1,0 +1,30 @@
+请基于以下统一上下文完成单次决策。
+
+当前用户消息：
+{user_message}
+
+完整系统上下文（与主回复同源）：
+{unified_system_context}
+
+当前关系状态：
+{relation_json}
+
+当前画像状态：
+{profile_json}
+
+当前会话状态：
+- scene_type={scene_type}
+- group_bot_mentioned={group_bot_mentioned}
+- group_allow_autonomous={group_allow_autonomous}
+- session_emotion={session_emotion}
+- global_emotion={global_emotion}
+- memory_count={memory_count}
+- current_hour={current_hour}
+- current_date={current_date}
+- current_year={current_year}
+
+输出要求：
+- 只输出 JSON。
+- `should_reply=false` 时 `reply` 必须为空。
+- `preferred_address` 最长 12 字符。
+- 数值字段都必须在 0 到 1 之间。
