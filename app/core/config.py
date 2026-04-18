@@ -126,6 +126,15 @@ class ImageUnderstandingConfig(BaseModel):
     merge_strategy: str = "ocr_plus_vision"
 
 
+class ToolRuntimeConfig(BaseModel):
+    enabled: bool = False
+    max_rounds: int = Field(default=4, ge=1, le=12)
+    max_tool_calls_per_round: int = Field(default=3, ge=1, le=10)
+    force_send_whitelist: bool = False
+    allowed_send_targets: list[str] = Field(default_factory=list)
+    send_rate_limit_per_minute: int = Field(default=10, ge=1, le=300)
+
+
 class Settings(BaseSettings):
     app: AppConfig = AppConfig()
     storage: StorageConfig = StorageConfig()
@@ -141,6 +150,7 @@ class Settings(BaseSettings):
     ocr: OCRConfig = OCRConfig()
     vision: VisionConfig = VisionConfig()
     image_understanding: ImageUnderstandingConfig = ImageUnderstandingConfig()
+    tools: ToolRuntimeConfig = ToolRuntimeConfig()
 
     model_config = SettingsConfigDict(
         env_file=".env",

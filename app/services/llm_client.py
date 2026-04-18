@@ -12,6 +12,7 @@ from app.core.config import settings
 from app.core.markdown_assets import read_required_markdown_asset
 from app.core.rule_lexicons import allowed_topic_labels
 from app.services.prompt_composer import PromptContext
+from app.tool_runtime.types import ToolCall, ToolLoopDecision
 
 logger = logging.getLogger(__name__)
 
@@ -584,6 +585,42 @@ class LLMClient:
             queries = [user_message]
         reason = str(data.get("reason", "")).strip()
         return RetrievalPlan(should_retrieve=should_retrieve, queries=queries, reason=reason)
+
+    def plan_tool_loop_step(
+        self,
+        *,
+        user_message: str,
+        tool_specs: list[dict[str, object]],
+        tool_results: list[dict[str, object]],
+    ) -> ToolLoopDecision:
+        data = self._call_json_decider(
+            system_asset="prompt/ai_tool_loop_system.md",
+            user_asset="prompt/ai_tool_loop_user.md",
+            values={
+                "user_message": user_message,
+                "tool_specs_json": json.dumps(tool_specs, ensure_ascii=False),
+                "tool_results_json": json.dumps(tool_results, ensure_ascii=False),
+            },
+        )
+        final_reply = str(data.get("final_reply", "")).strip()
+        if final_reply:
+            return ToolLoopDecision(final_reply=final_reply, tool_calls=[])
+        raw_calls = data.get("tool_calls", [])
+        calls: list[ToolCall] = []
+        if isinstance(raw_calls, list):
+            for item in raw_calls[: settings.tools.max_tool_calls_per_round]:
+                if not isinstance(item, dict):
+                    continue
+                tool_name = str(item.get("tool_name", "")).strip()
+                if not tool_name:
+                    continue
+                payload = item.get("input", {})
+                if not isinstance(payload, dict):
+                    payload = {}
+                call_id = str(item.get("call_id", "")).strip() or f"call_{len(calls)+1}"
+                calls.append(ToolCall(tool_name=tool_name, input=payload, call_id=call_id))
+        stop_reason = str(data.get("stop_reason", "")).strip()
+        return ToolLoopDecision(final_reply="", tool_calls=calls, stop_reason=stop_reason)
 
     @staticmethod
     def _service_unavailable_message() -> str:

@@ -28,14 +28,41 @@ from app.services.conversation_window_manager import ConversationWindowManager
 from app.services.llm_client import LLMClient
 from app.services.image_understanding_service import ImageUnderstandingService
 from app.services.prompt_composer import PromptComposer
+from app.services.retrieval_policy_service import RetrievalPolicyService
 from app.services.window_preprocessor import WindowPreprocessor
 from app.domain.conversation_scope import ConversationScope
+from app.services.channel_sender import ChannelRouter
+from app.tool_runtime.audit import SendRateLimiter
+from app.tool_runtime.builtin_tools import QueryMessagesTool, SearchMemoryTool, SendMessageTool
+from app.tool_runtime.registry import ToolRegistry
+from app.tool_runtime.runtime import ToolRuntime
 
 if TYPE_CHECKING:
     from app.core.config import Settings
 
 
 class Container:
+    def _build_tool_runtime(self, scope: ConversationScope) -> ToolRuntime:
+        registry = ToolRegistry()
+        registry.register(
+            SearchMemoryTool(
+                vector_repo=self.vector_repo,
+                retrieval_policy_service=self.retrieval_policy_service,
+                viewer_scope=scope,
+            )
+        )
+        registry.register(QueryMessagesTool(message_repo=self.message_repo))
+        registry.register(
+            SendMessageTool(
+                router=self.channel_router,
+                rate_limiter=self.send_rate_limiter,
+            )
+        )
+        return ToolRuntime(llm_client=self.llm_client, registry=registry)
+
+    def register_channel_sender(self, channel: str, sender: object) -> None:
+        self.channel_router.register(channel, sender)  # type: ignore[arg-type]
+
     @staticmethod
     def _resolve_sqlite_db_path() -> str:
         sqlite_path = (settings.storage.sqlite_db_path or "").strip()
@@ -85,6 +112,12 @@ class Container:
         self.prompt_composer = PromptComposer()
         self.llm_client = LLMClient()
         self.image_understanding_service = ImageUnderstandingService(llm_client=self.llm_client)
+        self.channel_router = ChannelRouter()
+        self.send_rate_limiter = SendRateLimiter(limit_per_minute=settings.tools.send_rate_limit_per_minute)
+        self.retrieval_policy_service = RetrievalPolicyService(
+            relation_repo=self.relation_repo,
+            preference_repo=self.preference_repo,
+        )
         self.metrics = MetricsRegistry()
         self.window_preprocessor = WindowPreprocessor(llm_client=self.llm_client)
         self.task_queue = TaskQueue(
@@ -125,6 +158,8 @@ class Container:
             task_queue=self.task_queue,
             window_preprocessor=self.window_preprocessor,
             metrics=self.metrics,
+            retrieval_policy_service=self.retrieval_policy_service,
+            tool_runtime_factory=self._build_tool_runtime,
         )
         self.window_manager = ConversationWindowManager(
             batch_executor=lambda scope, batch, abort, nickname, source_message_id, attachments, group_hints, window_round_id: self.chat_orchestrator.handle_window_batch(
@@ -176,9 +211,11 @@ class Container:
                 self.llm_client = LLMClient()
                 self.image_understanding_service = ImageUnderstandingService(llm_client=self.llm_client)
                 self.window_preprocessor = WindowPreprocessor(llm_client=self.llm_client)
+                self.send_rate_limiter = SendRateLimiter(limit_per_minute=settings.tools.send_rate_limit_per_minute)
                 rebuilt.append("llm_client")
                 rebuilt.append("image_understanding_service")
                 rebuilt.append("window_preprocessor")
+                rebuilt.append("send_rate_limiter")
 
             if emotion_changed:
                 self.emotion_engine = EmotionEngine(
@@ -224,6 +261,8 @@ class Container:
                     task_queue=self.task_queue,
                     window_preprocessor=self.window_preprocessor,
                     metrics=self.metrics,
+                    retrieval_policy_service=self.retrieval_policy_service,
+                    tool_runtime_factory=self._build_tool_runtime,
                 )
                 rebuilt.append("chat_orchestrator")
 

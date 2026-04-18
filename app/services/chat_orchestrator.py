@@ -2,6 +2,7 @@ from dataclasses import dataclass
 import logging
 import json
 import threading
+from typing import Callable
 
 from app.core.clock import now_local
 from app.core.rule_lexicons import (
@@ -30,6 +31,7 @@ from app.services.image_understanding_service import ImageUnderstandingService
 from app.services.prompt_composer import PromptComposer
 from app.services.retrieval_policy_service import RetrievalPolicyService
 from app.services.window_preprocessor import WindowPreprocessor
+from app.tool_runtime.runtime import ToolRuntime, ToolRuntimeRequest
 
 logger = logging.getLogger(__name__)
 ASSISTANT_RELATION_ID = "assistant"
@@ -63,6 +65,7 @@ class ChatOrchestrator:
         metrics: MetricsRegistry,
         retrieval_policy_service: RetrievalPolicyService | None = None,
         image_understanding_service: ImageUnderstandingService | None = None,
+        tool_runtime_factory: Callable[[ConversationScope], ToolRuntime] | None = None,
     ) -> None:
         self.identity_service = identity_service
         self.persona_engine = persona_engine
@@ -83,6 +86,7 @@ class ChatOrchestrator:
             preference_repo=preference_repo,
         )
         self.image_understanding_service = image_understanding_service
+        self.tool_runtime_factory = tool_runtime_factory
         self._session_emotion: dict[str, float] = {}
         self._session_emotion_lock = threading.RLock()
 
@@ -486,6 +490,18 @@ class ChatOrchestrator:
         if preflight is not None:
             return preflight
 
+        runtime_reply = ""
+        runtime = self.tool_runtime_factory(scope) if self.tool_runtime_factory is not None else None
+        if settings.tools.enabled and runtime is not None:
+            runtime_result = runtime.run(
+                ToolRuntimeRequest(
+                    scope_id=scope.scope_id,
+                    user_message=user_message,
+                    max_rounds=settings.tools.max_rounds,
+                )
+            )
+            runtime_reply = runtime_result.final_reply.strip()
+
         profile_summary_generated = ""
         preference_summary_generated = ""
         preferred_address_generated = ""
@@ -786,6 +802,8 @@ class ChatOrchestrator:
                 session_emotion=emotion_state.session_emotion,
                 global_emotion=emotion_state.global_emotion,
             )
+        if not reply and runtime_reply:
+            reply = runtime_reply
         if not reply:
             reply = self.llm_client.generate_reply(
                 prompt_context=prompt_ctx,

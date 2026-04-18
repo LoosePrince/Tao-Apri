@@ -156,6 +156,7 @@ class OneBotWSClient:
         self._task: asyncio.Task | None = None
         self._send_lock = asyncio.Lock()
         self._inflight_tasks: set[asyncio.Task] = set()
+        self._active_ws: websockets.ClientConnection | None = None
         self._scope_process_sequence: dict[str, int] = {}
         self._processed_message_ids: dict[str, float] = {}
         self._processed_message_ttl_seconds = 600.0
@@ -285,6 +286,22 @@ class OneBotWSClient:
             )
             await asyncio.sleep(delay_seconds)
 
+    async def send_text(self, *, target_type: str, target_id: str, content: str) -> str:
+        ws = self._active_ws
+        if ws is None:
+            raise RuntimeError("onebot websocket is not connected")
+        payload: dict[str, Any]
+        normalized = target_type.strip().lower()
+        if normalized == "group":
+            payload = {"action": "send_group_msg", "params": {"group_id": int(target_id), "message": content}}
+        elif normalized == "private":
+            payload = {"action": "send_private_msg", "params": {"user_id": int(target_id), "message": content}}
+        else:
+            raise ValueError(f"unsupported target_type: {target_type}")
+        async with self._send_lock:
+            await ws.send(json.dumps(payload, ensure_ascii=False))
+        return f"onebot:{normalized}:{target_id}:{int(time.time() * 1000)}"
+
     async def _process_message(
         self,
         ws: websockets.ClientConnection,
@@ -349,7 +366,9 @@ class OneBotWSClient:
                 try:
                     async with websockets.connect(ws_url, additional_headers=headers) as ws:
                         logger.info("OneBot WS connected.")
+                        self._active_ws = ws
                         await self._consume(ws)
+                        self._active_ws = None
                 except TypeError as exc:
                     # Backward compatibility for older websockets versions
                     # where connect() uses extra_headers instead of additional_headers.
@@ -361,7 +380,9 @@ class OneBotWSClient:
                     )
                     async with websockets.connect(ws_url, extra_headers=headers) as ws:
                         logger.info("OneBot WS connected.")
+                        self._active_ws = ws
                         await self._consume(ws)
+                        self._active_ws = None
             except ValueError as exc:
                 logger.error("OneBot config error: %s", exc)
                 if self._stop_event.is_set():
@@ -369,6 +390,7 @@ class OneBotWSClient:
                 await asyncio.sleep(settings.onebot.reconnect_interval_seconds)
             except Exception as exc:
                 logger.warning("OneBot WS disconnected: %s", exc)
+                self._active_ws = None
                 await asyncio.sleep(settings.onebot.reconnect_interval_seconds)
 
     async def _consume(self, ws: websockets.ClientConnection) -> None:

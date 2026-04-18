@@ -18,6 +18,7 @@ from app.core.clock import now_local_with_source
 from app.core.config import settings
 from app.core.logging import setup_logging
 from app.core.onebot_service import OneBotService
+from app.integrations.onebot_channel_sender import OneBotChannelSender
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -77,6 +78,8 @@ async def lifespan(app: FastAPI):
         window_manager=container.window_manager,
         reply_message_lookup=reply_lookup if callable(reply_lookup) else None,
     )
+    container.register_channel_sender("qq", OneBotChannelSender(onebot_service=onebot_service))
+    container.register_channel_sender("onebot", OneBotChannelSender(onebot_service=onebot_service))
     try:
         yield
     finally:
