@@ -9,9 +9,14 @@ class _ShouldReplyAsStringLLMClient(LLMClient):
         self._payload = payload
 
     def _call_json_decider(  # type: ignore[override]
-        self, *, system_asset: str, user_asset: str, values: dict[str, object]
+        self,
+        *,
+        system_asset: str | None = None,
+        system_prompt: str | None = None,
+        user_asset: str,
+        values: dict[str, object],
     ) -> dict[str, object]:
-        del system_asset, user_asset, values
+        del system_asset, system_prompt, user_asset, values
         return dict(self._payload)
 
 

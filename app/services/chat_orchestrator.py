@@ -38,6 +38,7 @@ from app.services.image_understanding_service import ImageUnderstandingService
 from app.services.prompt_composer import PromptComposer
 from app.services.retrieval_policy_service import RetrievalPolicyService
 from app.services.window_preprocessor import WindowPreprocessor
+from app.tool_runtime.digest import build_execution_digest
 from app.tool_runtime.runtime import ToolRuntime, ToolRuntimeRequest
 
 logger = logging.getLogger(__name__)
@@ -492,7 +493,9 @@ class ChatOrchestrator:
         if preflight is not None:
             return preflight
 
-        runtime_reply = ""
+        runtime_result = None
+        execution_digest = ""
+        available_tools_summary = ""
         runtime = self.tool_runtime_factory(scope) if self.tool_runtime_factory is not None else None
         if settings.tools.enabled and runtime is not None:
             runtime_result = runtime.run(
@@ -502,7 +505,8 @@ class ChatOrchestrator:
                     max_rounds=settings.tools.max_rounds,
                 )
             )
-            runtime_reply = runtime_result.final_reply.strip()
+            execution_digest = build_execution_digest(runtime_result)
+            available_tools_summary = ", ".join(spec.name for spec in runtime.registry.specs())
 
         profile_summary_generated = ""
         preference_summary_generated = ""
@@ -749,6 +753,8 @@ class ChatOrchestrator:
                 group_allow_autonomous=gh.allow_autonomous_without_mention,
                 include_notice=session.turn_count == 0 and settings.persona.policy_notice_on_first_turn,
                 image_context=image_context,
+                execution_digest=execution_digest,
+                available_tools_summary=available_tools_summary,
             )
             should_reply = bool(getattr(unified, "should_reply", True))
             skip_reason = str(getattr(unified, "skip_reason", "")).strip()
@@ -825,8 +831,6 @@ class ChatOrchestrator:
                 session_emotion=emotion_state.session_emotion,
                 global_emotion=emotion_state.global_emotion,
             )
-        if not reply and runtime_reply:
-            reply = runtime_reply
         if not reply:
             reply = self.llm_client.generate_reply(
                 prompt_context=prompt_ctx,

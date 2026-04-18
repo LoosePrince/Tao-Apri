@@ -46,9 +46,6 @@ class ToolRuntime:
                 tool_specs=[asdict(spec) for spec in self.registry.specs()],
                 tool_results=[self._tool_result_to_dict(item) for item in response.tool_results],
             )
-            if decision.final_reply.strip():
-                response.final_reply = decision.final_reply.strip()
-                return self._finalize_response(response)
             if not decision.tool_calls:
                 return self._finalize_response(response)
             turn_results = self._execute_turn_calls(

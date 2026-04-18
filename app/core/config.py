@@ -168,6 +168,7 @@ class ToolRuntimeConfig(BaseModel):
     retryable_error_codes: list[str] = Field(default_factory=lambda: ["timeout", "execution_failed"])
     result_budget_per_tool_chars: int = Field(default=4000, ge=256, le=20000)
     result_budget_total_chars: int = Field(default=12000, ge=1024, le=100000)
+    unified_digest_max_chars: int = Field(default=8000, ge=512, le=100000)
 
 
 class DelayedTaskConfig(BaseModel):

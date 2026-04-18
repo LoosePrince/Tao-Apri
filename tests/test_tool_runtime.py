@@ -6,7 +6,8 @@ from app.services.channel_sender import ChannelRouter, SendMessageRequest
 from app.tool_runtime.audit import SendRateLimiter
 from app.tool_runtime.builtin_tools import QueryMessagesTool, SendMessageTool
 from app.tool_runtime.registry import ToolRegistry
-from app.tool_runtime.runtime import ToolRuntime, ToolRuntimeRequest
+from app.tool_runtime.digest import build_execution_digest
+from app.tool_runtime.runtime import ToolRuntime, ToolRuntimeRequest, ToolRuntimeResponse
 from app.tool_runtime.types import ToolCall, ToolLoopDecision, ToolResult, ToolSpec
 
 
@@ -69,7 +70,7 @@ class _LLMStub:
         if self._step == 1:
             return ToolLoopDecision(tool_calls=[ToolCall(tool_name="echo_tool", input={"value": "ok"}, call_id="c1")])
         assert tool_results and tool_results[0]["data"]["echo"] == "ok"
-        return ToolLoopDecision(final_reply="done")
+        return ToolLoopDecision(tool_calls=[])
 
 
 class _SenderStub:
@@ -117,12 +118,12 @@ class _LargeResultTool:
         return ToolResult(tool_name=self.name, call_id="", ok=True, data={"blob": "x" * 5000})
 
 
-def test_tool_runtime_loop_executes_until_final_reply():
+def test_tool_runtime_loop_executes_until_handoff():
     registry = ToolRegistry()
     registry.register(_EchoTool())
     runtime = ToolRuntime(llm_client=_LLMStub(), registry=registry)
     response = runtime.run(ToolRuntimeRequest(scope_id="private:u1", user_message="hi", max_rounds=3))
-    assert response.final_reply == "done"
+    assert response.final_reply == ""
     assert len(response.used_tool_calls) == 1
     assert response.tool_results[0].ok is True
 
@@ -178,13 +179,13 @@ def test_tool_runtime_concurrent_batch_keeps_order():
                     ]
                 )
             assert [item["call_id"] for item in tool_results] == ["a-1", "b-1"]
-            return ToolLoopDecision(final_reply="ok")
+            return ToolLoopDecision(tool_calls=[])
 
     runtime = ToolRuntime(llm_client=_ConcurrentLLMStub(), registry=registry)
     started = time.perf_counter()
     response = runtime.run(ToolRuntimeRequest(scope_id="private:u1", user_message="hi", max_rounds=3))
     elapsed = time.perf_counter() - started
-    assert response.final_reply == "ok"
+    assert response.final_reply == ""
     assert [item.call_id for item in response.tool_results] == ["a-1", "b-1"]
     assert elapsed < 0.45
 
@@ -206,7 +207,7 @@ def test_tool_runtime_permission_gate_denies_non_readonly_when_configured():
                 if self._step == 1:
                     return ToolLoopDecision(tool_calls=[ToolCall(tool_name="write_tool", input={"value": "x"}, call_id="w-1")])
                 assert tool_results
-                return ToolLoopDecision(final_reply="done")
+                return ToolLoopDecision(tool_calls=[])
 
         runtime = ToolRuntime(llm_client=_OneTurnLLMStub(), registry=registry)
         response = runtime.run(ToolRuntimeRequest(scope_id="private:u1", user_message="hi", max_rounds=2))
@@ -244,11 +245,11 @@ def test_tool_runtime_retries_retryable_error_then_succeeds():
                 if self._step == 1:
                     return ToolLoopDecision(tool_calls=[ToolCall(tool_name="flaky_tool", input={}, call_id="f1")])
                 assert tool_results and tool_results[0]["ok"] is True
-                return ToolLoopDecision(final_reply="ok")
+                return ToolLoopDecision(tool_calls=[])
 
         runtime = ToolRuntime(llm_client=_OneCallLLM(), registry=registry)
         response = runtime.run(ToolRuntimeRequest(scope_id="private:u1", user_message="hi", max_rounds=2))
-        assert response.final_reply == "ok"
+        assert response.final_reply == ""
         assert response.tool_results[0].ok is True
     finally:
         settings.tools.retry_max_attempts = original_attempts
@@ -272,7 +273,7 @@ def test_tool_runtime_result_budget_truncates_large_payload():
                 self._step += 1
                 if self._step == 1:
                     return ToolLoopDecision(tool_calls=[ToolCall(tool_name="large_result_tool", input={}, call_id="l1")])
-                return ToolLoopDecision(final_reply="done")
+                return ToolLoopDecision(tool_calls=[])
 
         runtime = ToolRuntime(llm_client=_SingleRoundLLM(), registry=registry)
         response = runtime.run(ToolRuntimeRequest(scope_id="private:u1", user_message="hi", max_rounds=1))
@@ -284,3 +285,15 @@ def test_tool_runtime_result_budget_truncates_large_payload():
     finally:
         settings.tools.result_budget_per_tool_chars = original_per
         settings.tools.result_budget_total_chars = original_total
+
+
+def test_build_execution_digest_includes_tool_trace():
+    response = ToolRuntimeResponse()
+    response.used_tool_calls = [ToolCall(tool_name="echo_tool", input={"value": "x"}, call_id="c1")]
+    response.tool_results = [
+        ToolResult(tool_name="echo_tool", call_id="c1", ok=True, data={"echo": "x"}),
+    ]
+    digest = build_execution_digest(response, max_chars=4000)
+    assert "echo_tool" in digest
+    assert "echo" in digest
+    assert "ok" in digest

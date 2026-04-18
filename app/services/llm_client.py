@@ -124,11 +124,23 @@ class LLMClient:
                 return False
         return default
 
-    def _call_json_decider(self, *, system_asset: str, user_asset: str, values: dict[str, object]) -> dict[str, object]:
+    def _call_json_decider(
+        self,
+        *,
+        system_asset: str | None = None,
+        system_prompt: str | None = None,
+        user_asset: str,
+        values: dict[str, object],
+    ) -> dict[str, object]:
         provider = settings.llm.provider.lower().strip()
         if provider != "kilo" or not settings.llm.api_key or self._is_circuit_open():
             return {}
-        system_prompt = read_required_markdown_asset(system_asset)
+        if system_prompt is not None:
+            resolved_system = system_prompt
+        elif system_asset is not None:
+            resolved_system = read_required_markdown_asset(system_asset)
+        else:
+            raise ValueError("Either system_asset or system_prompt is required")
         user_template = read_required_markdown_asset(user_asset)
         user_prompt = self._render_template(user_template, values)
         client = self._get_client()
@@ -137,7 +149,7 @@ class LLMClient:
                 model=settings.llm.model,
                 temperature=0,
                 messages=[
-                    {"role": "system", "content": system_prompt},
+                    {"role": "system", "content": resolved_system},
                     {"role": "user", "content": user_prompt},
                 ],
             )
@@ -146,7 +158,11 @@ class LLMClient:
             return self._extract_json(content or "")
         except Exception as exc:
             self._on_request_failure(exc)
-            logger.warning("JSON decider call failed | system_asset=%s | err=%s", system_asset, exc)
+            logger.warning(
+                "JSON decider call failed | system_asset=%s | err=%s",
+                system_asset or "(composed)",
+                exc,
+            )
             return {}
 
     def classify_topic(self, text: str) -> str:
@@ -361,6 +377,8 @@ class LLMClient:
         group_allow_autonomous: bool = False,
         include_notice: bool = True,
         image_context: str = "",
+        execution_digest: str = "",
+        available_tools_summary: str = "",
     ) -> UnifiedDecision:
         provider = settings.llm.provider.lower().strip()
         if provider != "kilo" or not settings.llm.api_key or self._is_circuit_open():
@@ -373,7 +391,9 @@ class LLMClient:
                 retrieval_plan=RetrievalPlan(should_retrieve=True, queries=[user_message], reason="fallback"),
             )
 
-        system_prompt = read_required_markdown_asset("prompt/ai_unified_decision_system.md")
+        identity_fragment = read_required_markdown_asset("prompt/xingtao_identity_fragment.md")
+        system_body = read_required_markdown_asset("prompt/ai_unified_decision_system.md")
+        system_prompt = f"{identity_fragment}\n\n{system_body}"
         user_template = read_required_markdown_asset("prompt/ai_unified_decision_user.md")
         unified_system_context = self._build_system_prompt(prompt_context, include_notice=include_notice)
         user_prompt = self._render_template(
@@ -394,6 +414,8 @@ class LLMClient:
                 "current_date": current_date,
                 "current_year": str(current_year),
                 "image_context": image_context.strip() or "无",
+                "execution_digest": (execution_digest.strip() or "（无）"),
+                "available_tools_summary": (available_tools_summary.strip() or "（当前未启用工具或本回合无列表）"),
             },
         )
         client = self._get_client()
@@ -587,8 +609,11 @@ class LLMClient:
     ) -> ToolLoopDecision:
         local_now = now_local()
         utc_now = datetime.now(timezone.utc)
+        identity = read_required_markdown_asset("prompt/xingtao_identity_fragment.md")
+        tool_loop_body = read_required_markdown_asset("prompt/ai_tool_loop_system.md")
+        composed_system = f"{identity}\n\n{tool_loop_body}"
         data = self._call_json_decider(
-            system_asset="prompt/ai_tool_loop_system.md",
+            system_prompt=composed_system,
             user_asset="prompt/ai_tool_loop_user.md",
             values={
                 "user_message": user_message,
@@ -600,9 +625,7 @@ class LLMClient:
                 "current_utc_time": utc_now.isoformat(),
             },
         )
-        final_reply = str(data.get("final_reply", "")).strip()
-        if final_reply:
-            return ToolLoopDecision(final_reply=final_reply, tool_calls=[])
+        # `final_reply` in JSON is legacy; user-visible copy comes from unified synthesis only.
         raw_calls = data.get("tool_calls", [])
         calls: list[ToolCall] = []
         if isinstance(raw_calls, list):

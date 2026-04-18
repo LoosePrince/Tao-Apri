@@ -61,6 +61,8 @@ class ToolExecutionContext:
 
 @dataclass(slots=True)
 class ToolLoopDecision:
+    """Tool planning step. User-visible copy is produced by unified synthesis, not `final_reply`."""
+
     final_reply: str = ""
     tool_calls: list[ToolCall] = field(default_factory=list)
     stop_reason: str = ""

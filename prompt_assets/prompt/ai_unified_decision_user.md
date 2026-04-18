@@ -29,6 +29,12 @@
 图像识别补充上下文（辅助证据，可能不完整）：
 {image_context}
 
+本回合工具执行摘要（已压缩，含输入/输出有效信息；无则为占位）：
+{execution_digest}
+
+当前可用工具名称列表（只读核对；实际是否调用以摘要为准）：
+{available_tools_summary}
+
 输出要求：
 - 只输出 JSON。
 - `should_reply=false` 时 `reply` 必须为空。
