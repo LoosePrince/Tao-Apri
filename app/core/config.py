@@ -135,6 +135,15 @@ class ToolRuntimeConfig(BaseModel):
     send_rate_limit_per_minute: int = Field(default=10, ge=1, le=300)
 
 
+class DelayedTaskConfig(BaseModel):
+    enabled: bool = True
+    poll_interval_seconds: float = Field(default=1.0, ge=0.2, le=60.0)
+    claim_batch_size: int = Field(default=10, ge=1, le=200)
+    stale_lease_seconds: float = Field(default=120.0, ge=5.0, le=3600.0)
+    max_attempts: int = Field(default=3, ge=1, le=20)
+    retry_backoff_seconds: list[float] = Field(default_factory=lambda: [10.0, 30.0, 60.0])
+
+
 class Settings(BaseSettings):
     app: AppConfig = AppConfig()
     storage: StorageConfig = StorageConfig()
@@ -151,6 +160,7 @@ class Settings(BaseSettings):
     vision: VisionConfig = VisionConfig()
     image_understanding: ImageUnderstandingConfig = ImageUnderstandingConfig()
     tools: ToolRuntimeConfig = ToolRuntimeConfig()
+    delayed_task: DelayedTaskConfig = DelayedTaskConfig()
 
     model_config = SettingsConfigDict(
         env_file=".env",

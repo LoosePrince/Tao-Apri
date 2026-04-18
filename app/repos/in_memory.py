@@ -3,8 +3,8 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from app.core.config import settings
-from app.domain.models import MemoryFact, Message, Session, User
-from app.repos.interfaces import FactRepo, MessageRepo, SessionRepo, UserRepo, VectorRepo
+from app.domain.models import DelayedTask, MemoryFact, Message, Session, User
+from app.repos.interfaces import DelayedTaskRepo, FactRepo, MessageRepo, SessionRepo, UserRepo, VectorRepo
 
 
 def _tokenize(text: str) -> set[str]:
@@ -162,3 +162,82 @@ class InMemoryFactRepo(FactRepo):
 
     def list_by_user(self, user_id: str, limit: int = 50) -> list[MemoryFact]:
         return self._by_user[user_id][-limit:]
+
+
+class InMemoryDelayedTaskRepo(DelayedTaskRepo):
+    def __init__(self) -> None:
+        self._tasks: dict[str, DelayedTask] = {}
+
+    def enqueue(self, task: DelayedTask) -> DelayedTask:
+        now = datetime.now(timezone.utc)
+        if task.created_at is None:
+            task.created_at = now
+        task.updated_at = now
+        self._tasks[task.task_id] = task
+        return task
+
+    def claim_due(self, *, now_iso: str, limit: int, worker_id: str) -> list[DelayedTask]:
+        now = datetime.fromisoformat(now_iso)
+        due = [
+            task
+            for task in self._tasks.values()
+            if task.status == "pending" and task.run_at <= now
+        ]
+        due.sort(key=lambda item: item.run_at)
+        claimed = due[: max(1, limit)]
+        for task in claimed:
+            task.status = "running"
+            task.claimed_by = worker_id
+            task.claimed_at = now
+            task.updated_at = now
+        return claimed
+
+    def mark_done(self, task_id: str) -> None:
+        task = self._tasks.get(task_id)
+        if not task:
+            return
+        task.status = "done"
+        task.updated_at = datetime.now(timezone.utc)
+
+    def mark_retry(self, *, task_id: str, next_run_at_iso: str, last_error: str) -> None:
+        task = self._tasks.get(task_id)
+        if not task:
+            return
+        task.status = "pending"
+        task.run_at = datetime.fromisoformat(next_run_at_iso)
+        task.attempt_count += 1
+        task.last_error = last_error
+        task.claimed_by = ""
+        task.claimed_at = None
+        task.updated_at = datetime.now(timezone.utc)
+
+    def mark_dead(self, *, task_id: str, last_error: str) -> None:
+        task = self._tasks.get(task_id)
+        if not task:
+            return
+        task.status = "dead"
+        task.last_error = last_error
+        task.updated_at = datetime.now(timezone.utc)
+
+    def cancel(self, task_id: str) -> None:
+        task = self._tasks.get(task_id)
+        if not task:
+            return
+        task.status = "cancelled"
+        task.updated_at = datetime.now(timezone.utc)
+
+    def requeue_stale_running(self, *, stale_before_iso: str) -> int:
+        stale_before = datetime.fromisoformat(stale_before_iso)
+        count = 0
+        now = datetime.now(timezone.utc)
+        for task in self._tasks.values():
+            if task.status == "running" and task.claimed_at and task.claimed_at <= stale_before:
+                task.status = "pending"
+                task.claimed_by = ""
+                task.claimed_at = None
+                task.updated_at = now
+                count += 1
+        return count
+
+    def get(self, task_id: str) -> DelayedTask | None:
+        return self._tasks.get(task_id)

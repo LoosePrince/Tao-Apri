@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, UTC
+from datetime import UTC, datetime, timedelta, timezone
+from uuid import uuid4
+import json
 from typing import Any
 
 from app.core.config import settings
 from app.domain.conversation_scope import ConversationScope
-from app.repos.interfaces import MessageRepo, VectorRepo
+from app.domain.models import DelayedTask
+from app.repos.interfaces import DelayedTaskRepo, MessageRepo, VectorRepo
 from app.services.channel_sender import ChannelRouter, SendMessageRequest
 from app.services.retrieval_policy_service import RetrievalPolicyService
 from app.tool_runtime.audit import SendRateLimiter
@@ -184,4 +187,103 @@ class SendMessageTool:
             call_id="",
             ok=True,
             data={"platform_message_id": platform_message_id, "target": key},
+        )
+
+
+@dataclass(slots=True)
+class ScheduleDelayedTaskTool:
+    delayed_task_repo: DelayedTaskRepo
+    viewer_scope: ConversationScope
+
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            name="schedule_delayed_task",
+            description="创建延时任务，在指定时间触发 AI 执行",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "delay_seconds": {"type": "integer", "minimum": 1},
+                    "run_at": {"type": "string"},
+                    "description": {"type": "string"},
+                    "reason": {"type": "string"},
+                    "trigger_source": {"type": "string"},
+                    "task_payload": {"type": "object"},
+                },
+                "required": ["description", "reason", "trigger_source"],
+            },
+            read_only=False,
+            concurrency_safe=False,
+        )
+
+    @staticmethod
+    def _parse_run_at(*, delay_seconds: int | None, run_at: str | None) -> datetime:
+        has_delay = delay_seconds is not None
+        has_run_at = bool((run_at or "").strip())
+        if has_delay == has_run_at:
+            raise ValueError("exactly one of delay_seconds or run_at is required")
+        now = datetime.now(timezone.utc)
+        if has_delay:
+            seconds = max(1, int(delay_seconds or 0))
+            return now + timedelta(seconds=seconds)
+        parsed = datetime.fromisoformat(str(run_at).strip())
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    def call(self, payload: dict[str, Any]) -> ToolResult:
+        description = str(payload.get("description", "")).strip()
+        reason = str(payload.get("reason", "")).strip()
+        trigger_source = str(payload.get("trigger_source", "")).strip()
+        if not description or not reason or not trigger_source:
+            return ToolResult(
+                tool_name="schedule_delayed_task",
+                call_id="",
+                ok=False,
+                error="description, reason and trigger_source are required",
+            )
+        try:
+            run_at = self._parse_run_at(
+                delay_seconds=payload.get("delay_seconds"),
+                run_at=str(payload.get("run_at", "")).strip() or None,
+            )
+        except Exception as exc:
+            return ToolResult(tool_name="schedule_delayed_task", call_id="", ok=False, error=str(exc))
+
+        raw_payload = payload.get("task_payload")
+        task_payload = raw_payload if isinstance(raw_payload, dict) else {}
+        if "user_id" not in task_payload:
+            task_payload["user_id"] = self.viewer_scope.actor_user_id
+        if "scene_type" not in task_payload:
+            task_payload["scene_type"] = self.viewer_scope.scene_type
+        if "group_id" not in task_payload and self.viewer_scope.group_id:
+            task_payload["group_id"] = self.viewer_scope.group_id
+        if "platform" not in task_payload:
+            task_payload["platform"] = self.viewer_scope.platform
+        task_payload.setdefault("trigger_source", trigger_source)
+        task_payload.setdefault("reason", reason)
+
+        task = DelayedTask(
+            task_id=str(uuid4()),
+            run_at=run_at,
+            status="pending",
+            description=description,
+            reason=reason,
+            trigger_source=trigger_source,
+            payload_json=json.dumps(task_payload, ensure_ascii=False),
+            scope_id=self.viewer_scope.scope_id,
+            max_attempts=settings.delayed_task.max_attempts,
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        )
+        created = self.delayed_task_repo.enqueue(task)
+        return ToolResult(
+            tool_name="schedule_delayed_task",
+            call_id="",
+            ok=True,
+            data={
+                "task_id": created.task_id,
+                "status": created.status,
+                "scheduled_at": datetime.now(UTC).isoformat(),
+                "normalized_run_at": created.run_at.isoformat(),
+            },
         )

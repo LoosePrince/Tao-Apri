@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 from app.core.config import settings
 from app.domain.models import (
+    DelayedTask,
     MemoryFact,
     Message,
     Session,
@@ -14,6 +15,7 @@ from app.domain.models import (
     UserRelation,
 )
 from app.repos.interfaces import (
+    DelayedTaskRepo,
     EmotionStateRepo,
     FactRepo,
     MessageRepo,
@@ -155,6 +157,27 @@ class SQLiteStore:
                 emotion_peak_level REAL NOT NULL DEFAULT 0,
                 updated_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS delayed_tasks (
+                task_id TEXT PRIMARY KEY,
+                run_at TEXT NOT NULL,
+                status TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                reason TEXT NOT NULL DEFAULT '',
+                trigger_source TEXT NOT NULL DEFAULT '',
+                payload_json TEXT NOT NULL DEFAULT '{}',
+                scope_id TEXT NOT NULL DEFAULT '',
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                max_attempts INTEGER NOT NULL DEFAULT 3,
+                last_error TEXT NOT NULL DEFAULT '',
+                claimed_by TEXT NOT NULL DEFAULT '',
+                claimed_at TEXT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_delayed_tasks_poll
+                ON delayed_tasks(status, run_at);
+            CREATE INDEX IF NOT EXISTS idx_delayed_tasks_scope
+                ON delayed_tasks(scope_id);
             """
         )
         # Migrate legacy sessions table (user_id UNIQUE) to scope_id-based sessions.
@@ -296,6 +319,58 @@ class SQLiteStore:
         if "emotion_peak_level" not in profile_columns:
             self.conn.execute(
                 "ALTER TABLE user_profiles ADD COLUMN emotion_peak_level REAL NOT NULL DEFAULT 0"
+            )
+        delayed_columns = {
+            row["name"]
+            for row in self.conn.execute("PRAGMA table_info(delayed_tasks)").fetchall()
+        }
+        if "description" not in delayed_columns:
+            self.conn.execute(
+                "ALTER TABLE delayed_tasks ADD COLUMN description TEXT NOT NULL DEFAULT ''"
+            )
+        if "reason" not in delayed_columns:
+            self.conn.execute(
+                "ALTER TABLE delayed_tasks ADD COLUMN reason TEXT NOT NULL DEFAULT ''"
+            )
+        if "trigger_source" not in delayed_columns:
+            self.conn.execute(
+                "ALTER TABLE delayed_tasks ADD COLUMN trigger_source TEXT NOT NULL DEFAULT ''"
+            )
+        if "payload_json" not in delayed_columns:
+            self.conn.execute(
+                "ALTER TABLE delayed_tasks ADD COLUMN payload_json TEXT NOT NULL DEFAULT '{}'"
+            )
+        if "scope_id" not in delayed_columns:
+            self.conn.execute(
+                "ALTER TABLE delayed_tasks ADD COLUMN scope_id TEXT NOT NULL DEFAULT ''"
+            )
+        if "attempt_count" not in delayed_columns:
+            self.conn.execute(
+                "ALTER TABLE delayed_tasks ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0"
+            )
+        if "max_attempts" not in delayed_columns:
+            self.conn.execute(
+                "ALTER TABLE delayed_tasks ADD COLUMN max_attempts INTEGER NOT NULL DEFAULT 3"
+            )
+        if "last_error" not in delayed_columns:
+            self.conn.execute(
+                "ALTER TABLE delayed_tasks ADD COLUMN last_error TEXT NOT NULL DEFAULT ''"
+            )
+        if "claimed_by" not in delayed_columns:
+            self.conn.execute(
+                "ALTER TABLE delayed_tasks ADD COLUMN claimed_by TEXT NOT NULL DEFAULT ''"
+            )
+        if "claimed_at" not in delayed_columns:
+            self.conn.execute(
+                "ALTER TABLE delayed_tasks ADD COLUMN claimed_at TEXT NULL"
+            )
+        if "created_at" not in delayed_columns:
+            self.conn.execute(
+                "ALTER TABLE delayed_tasks ADD COLUMN created_at TEXT NOT NULL DEFAULT ''"
+            )
+        if "updated_at" not in delayed_columns:
+            self.conn.execute(
+                "ALTER TABLE delayed_tasks ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''"
             )
         self.conn.commit()
 
@@ -880,3 +955,180 @@ class SQLiteProfileRepo(ProfileRepo):
         )
         self.store.conn.commit()
         return self.get(profile.user_id) or profile
+
+
+class SQLiteDelayedTaskRepo(DelayedTaskRepo):
+    def __init__(self, store: SQLiteStore) -> None:
+        self.store = store
+
+    @staticmethod
+    def _to_task(row: sqlite3.Row) -> DelayedTask:
+        return DelayedTask(
+            task_id=row["task_id"],
+            run_at=datetime.fromisoformat(row["run_at"]),
+            status=row["status"],
+            description=row["description"],
+            reason=row["reason"],
+            trigger_source=row["trigger_source"],
+            payload_json=row["payload_json"],
+            scope_id=row["scope_id"],
+            attempt_count=int(row["attempt_count"]),
+            max_attempts=int(row["max_attempts"]),
+            last_error=row["last_error"],
+            claimed_by=row["claimed_by"],
+            claimed_at=_parse_dt(row["claimed_at"]),
+            created_at=_parse_dt(row["created_at"]),
+            updated_at=_parse_dt(row["updated_at"]),
+        )
+
+    def enqueue(self, task: DelayedTask) -> DelayedTask:
+        now = _now_iso()
+        created_at = task.created_at.isoformat() if task.created_at else now
+        updated_at = task.updated_at.isoformat() if task.updated_at else now
+        self.store.conn.execute(
+            """
+            INSERT INTO delayed_tasks (
+                task_id, run_at, status, description, reason, trigger_source, payload_json,
+                scope_id, attempt_count, max_attempts, last_error, claimed_by, claimed_at, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(task_id) DO UPDATE SET
+                run_at = excluded.run_at,
+                status = excluded.status,
+                description = excluded.description,
+                reason = excluded.reason,
+                trigger_source = excluded.trigger_source,
+                payload_json = excluded.payload_json,
+                scope_id = excluded.scope_id,
+                attempt_count = excluded.attempt_count,
+                max_attempts = excluded.max_attempts,
+                last_error = excluded.last_error,
+                claimed_by = excluded.claimed_by,
+                claimed_at = excluded.claimed_at,
+                updated_at = excluded.updated_at
+            """,
+            (
+                task.task_id,
+                task.run_at.isoformat(),
+                task.status,
+                task.description,
+                task.reason,
+                task.trigger_source,
+                task.payload_json,
+                task.scope_id,
+                task.attempt_count,
+                task.max_attempts,
+                task.last_error,
+                task.claimed_by,
+                task.claimed_at.isoformat() if task.claimed_at else None,
+                created_at,
+                updated_at,
+            ),
+        )
+        self.store.conn.commit()
+        return self.get(task.task_id) or task
+
+    def claim_due(self, *, now_iso: str, limit: int, worker_id: str) -> list[DelayedTask]:
+        rows = self.store.conn.execute(
+            """
+            SELECT task_id FROM delayed_tasks
+            WHERE status = 'pending' AND run_at <= ?
+            ORDER BY run_at ASC
+            LIMIT ?
+            """,
+            (now_iso, max(1, limit)),
+        ).fetchall()
+        claimed: list[DelayedTask] = []
+        for row in rows:
+            task_id = str(row["task_id"])
+            cursor = self.store.conn.execute(
+                """
+                UPDATE delayed_tasks
+                SET status = 'running', claimed_by = ?, claimed_at = ?, updated_at = ?
+                WHERE task_id = ? AND status = 'pending'
+                """,
+                (worker_id, now_iso, now_iso, task_id),
+            )
+            if cursor.rowcount <= 0:
+                continue
+            task = self.get(task_id)
+            if task:
+                claimed.append(task)
+        self.store.conn.commit()
+        return claimed
+
+    def mark_done(self, task_id: str) -> None:
+        now = _now_iso()
+        self.store.conn.execute(
+            """
+            UPDATE delayed_tasks
+            SET status = 'done', updated_at = ?
+            WHERE task_id = ?
+            """,
+            (now, task_id),
+        )
+        self.store.conn.commit()
+
+    def mark_retry(self, *, task_id: str, next_run_at_iso: str, last_error: str) -> None:
+        now = _now_iso()
+        self.store.conn.execute(
+            """
+            UPDATE delayed_tasks
+            SET status = 'pending',
+                run_at = ?,
+                attempt_count = attempt_count + 1,
+                last_error = ?,
+                claimed_by = '',
+                claimed_at = NULL,
+                updated_at = ?
+            WHERE task_id = ?
+            """,
+            (next_run_at_iso, last_error[:500], now, task_id),
+        )
+        self.store.conn.commit()
+
+    def mark_dead(self, *, task_id: str, last_error: str) -> None:
+        now = _now_iso()
+        self.store.conn.execute(
+            """
+            UPDATE delayed_tasks
+            SET status = 'dead', last_error = ?, updated_at = ?
+            WHERE task_id = ?
+            """,
+            (last_error[:500], now, task_id),
+        )
+        self.store.conn.commit()
+
+    def cancel(self, task_id: str) -> None:
+        now = _now_iso()
+        self.store.conn.execute(
+            """
+            UPDATE delayed_tasks
+            SET status = 'cancelled', updated_at = ?
+            WHERE task_id = ?
+            """,
+            (now, task_id),
+        )
+        self.store.conn.commit()
+
+    def requeue_stale_running(self, *, stale_before_iso: str) -> int:
+        now = _now_iso()
+        cursor = self.store.conn.execute(
+            """
+            UPDATE delayed_tasks
+            SET status = 'pending', claimed_by = '', claimed_at = NULL, updated_at = ?
+            WHERE status = 'running' AND claimed_at IS NOT NULL AND claimed_at <= ?
+            """,
+            (now, stale_before_iso),
+        )
+        self.store.conn.commit()
+        return int(cursor.rowcount or 0)
+
+    def get(self, task_id: str) -> DelayedTask | None:
+        row = self.store.conn.execute(
+            "SELECT * FROM delayed_tasks WHERE task_id = ?",
+            (task_id,),
+        ).fetchone()
+        if not row:
+            return None
+        return self._to_task(row)

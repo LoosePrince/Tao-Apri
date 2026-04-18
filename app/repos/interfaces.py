@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 
-from app.domain.models import MemoryFact, Message, Session, User, UserPreference, UserProfile, UserRelation
+from app.domain.models import DelayedTask, MemoryFact, Message, Session, User, UserPreference, UserProfile, UserRelation
 
 
 class UserRepo(ABC):
@@ -86,3 +86,29 @@ class ProfileRepo(ABC):
 
     @abstractmethod
     def upsert(self, profile: UserProfile) -> UserProfile: ...
+
+
+class DelayedTaskRepo(ABC):
+    @abstractmethod
+    def enqueue(self, task: DelayedTask) -> DelayedTask: ...
+
+    @abstractmethod
+    def claim_due(self, *, now_iso: str, limit: int, worker_id: str) -> list[DelayedTask]: ...
+
+    @abstractmethod
+    def mark_done(self, task_id: str) -> None: ...
+
+    @abstractmethod
+    def mark_retry(self, *, task_id: str, next_run_at_iso: str, last_error: str) -> None: ...
+
+    @abstractmethod
+    def mark_dead(self, *, task_id: str, last_error: str) -> None: ...
+
+    @abstractmethod
+    def cancel(self, task_id: str) -> None: ...
+
+    @abstractmethod
+    def requeue_stale_running(self, *, stale_before_iso: str) -> int: ...
+
+    @abstractmethod
+    def get(self, task_id: str) -> DelayedTask | None: ...

@@ -90,3 +90,22 @@ class UserProfile:
     fatigue_level: float = 0.0
     emotion_peak_level: float = 0.0
     updated_at: datetime | None = None
+
+
+@dataclass(slots=True)
+class DelayedTask:
+    task_id: str
+    run_at: datetime
+    status: str = "pending"  # pending | running | done | failed | cancelled | dead
+    description: str = ""
+    reason: str = ""
+    trigger_source: str = ""
+    payload_json: str = "{}"
+    scope_id: str = ""
+    attempt_count: int = 0
+    max_attempts: int = 3
+    last_error: str = ""
+    claimed_by: str = ""
+    claimed_at: datetime | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None

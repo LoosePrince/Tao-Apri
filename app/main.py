@@ -66,6 +66,7 @@ async def lifespan(app: FastAPI):
     _log_startup_diagnostics()
     container.task_queue.start()
     container.periodic_scheduler.start()
+    container.delayed_task_scheduler.start()
     container.window_manager.start()
     if settings.llm.startup_healthcheck_enabled:
         ok = container.llm_client.startup_health_check()
@@ -85,6 +86,7 @@ async def lifespan(app: FastAPI):
     finally:
         await onebot_service.stop()
         container.window_manager.stop()
+        container.delayed_task_scheduler.stop()
         container.periodic_scheduler.stop()
         container.task_queue.stop()
 

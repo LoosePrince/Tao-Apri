@@ -1,5 +1,6 @@
 from urllib.parse import urlparse
 from typing import TYPE_CHECKING
+import json
 
 from app.core.config import settings
 from app.core.metrics import MetricsRegistry
@@ -8,11 +9,13 @@ from app.domain.services.identity_service import IdentityService
 from app.domain.services.memory_writer import MemoryWriter
 from app.domain.services.persona_engine import PersonaEngine
 from app.jobs.emotion_aggregator import EmotionAggregatorJob
+from app.jobs.delayed_task_scheduler import DelayedTaskScheduler
 from app.jobs.periodic_scheduler import PeriodicScheduler
 from app.jobs.task_queue import TaskQueue
 from app.repos.in_memory import InMemoryVectorRepo
 from app.repos.sqlite_repo import (
     SQLiteEmotionStateRepo,
+    SQLiteDelayedTaskRepo,
     SQLiteFactRepo,
     SQLiteMessageRepo,
     SQLitePreferenceRepo,
@@ -33,7 +36,7 @@ from app.services.window_preprocessor import WindowPreprocessor
 from app.domain.conversation_scope import ConversationScope
 from app.services.channel_sender import ChannelRouter
 from app.tool_runtime.audit import SendRateLimiter
-from app.tool_runtime.builtin_tools import QueryMessagesTool, SearchMemoryTool, SendMessageTool
+from app.tool_runtime.builtin_tools import QueryMessagesTool, ScheduleDelayedTaskTool, SearchMemoryTool, SendMessageTool
 from app.tool_runtime.registry import ToolRegistry
 from app.tool_runtime.runtime import ToolRuntime
 
@@ -56,6 +59,12 @@ class Container:
             SendMessageTool(
                 router=self.channel_router,
                 rate_limiter=self.send_rate_limiter,
+            )
+        )
+        registry.register(
+            ScheduleDelayedTaskTool(
+                delayed_task_repo=self.delayed_task_repo,
+                viewer_scope=scope,
             )
         )
         return ToolRuntime(llm_client=self.llm_client, registry=registry)
@@ -95,6 +104,7 @@ class Container:
         self.relation_repo = SQLiteRelationRepo(self.store)
         self.preference_repo = SQLitePreferenceRepo(self.store)
         self.profile_repo = SQLiteProfileRepo(self.store)
+        self.delayed_task_repo = SQLiteDelayedTaskRepo(self.store)
 
         self.identity_service = IdentityService(self.user_repo, self.session_repo)
         self.persona_engine = PersonaEngine()
@@ -142,6 +152,11 @@ class Container:
             interval_seconds=settings.jobs.maintenance_interval_seconds,
             job=self.vector_repo.run_maintenance,
         )
+        self.delayed_task_scheduler = DelayedTaskScheduler(
+            repo=self.delayed_task_repo,
+            task_queue=self.task_queue,
+            executor=self._execute_delayed_task,
+        )
         self.chat_orchestrator = ChatOrchestrator(
             identity_service=self.identity_service,
             persona_engine=self.persona_engine,
@@ -175,6 +190,41 @@ class Container:
             metrics=self.metrics,
         )
 
+    def _execute_delayed_task(self, task) -> None:
+        from app.domain.models import DelayedTask
+
+        if not isinstance(task, DelayedTask):
+            raise TypeError(f"unexpected task type: {type(task)}")
+        payload = json.loads(task.payload_json or "{}")
+        message = str(payload.get("message", "")).strip()
+        if not message:
+            message = task.description.strip() or "执行延时任务"
+        trigger_source = str(payload.get("trigger_source", task.trigger_source)).strip() or "schedule_delayed_task"
+        reason = str(payload.get("reason", task.reason)).strip() or "未说明"
+        platform = str(payload.get("platform", "tool_runtime")).strip() or "tool_runtime"
+        scene_type = str(payload.get("scene_type", "private")).strip().lower()
+        user_id = str(payload.get("user_id", "")).strip()
+        group_id = str(payload.get("group_id", "")).strip()
+        if not user_id:
+            raise ValueError("delayed task payload missing user_id")
+        if scene_type == "group" and group_id:
+            scope = ConversationScope.group(platform=platform, group_id=group_id, user_id=user_id)
+        else:
+            scope = ConversationScope.private(platform=platform, user_id=user_id)
+        synthetic_message = (
+            f"[延时任务触发]\\n任务ID: {task.task_id}\\n触发源: {trigger_source}\\n原因: {reason}\\n任务描述: {task.description}\\n执行内容: {message}"
+        )
+        self.chat_orchestrator.handle_window_batch(
+            scope=scope,
+            user_messages=[synthetic_message],
+            abort_requested=False,
+            nickname=str(payload.get("nickname", "")).strip() or None,
+            source_message_id=f"delayed:{task.task_id}",
+            attachments=[],
+            group_hints=None,
+            window_round_id=None,
+        )
+
     def apply_runtime_settings(self, new_settings: "Settings") -> dict[str, object]:
         """
         将 new_settings 应用到运行实例，并在需要时重建关键组件。
@@ -200,6 +250,7 @@ class Container:
 
             scheduler_rebuild_keys = {"maintenance_enabled", "maintenance_interval_seconds"}
             scheduler_changed = any(old_dump["jobs"].get(k) != new_dump["jobs"].get(k) for k in scheduler_rebuild_keys)
+            delayed_task_changed = old_dump.get("delayed_task") != new_dump.get("delayed_task")
 
             # 先更新全局 settings，让后续重建读到新值。
             for top_key in SettingsModel.model_fields.keys():
@@ -283,12 +334,23 @@ class Container:
                 rebuilt.append("periodic_scheduler")
                 self.periodic_scheduler.start()
 
+            if delayed_task_changed or jobs_queue_changed:
+                self.delayed_task_scheduler.stop()
+                self.delayed_task_scheduler = DelayedTaskScheduler(
+                    repo=self.delayed_task_repo,
+                    task_queue=self.task_queue,
+                    executor=self._execute_delayed_task,
+                )
+                self.delayed_task_scheduler.start()
+                rebuilt.append("delayed_task_scheduler")
+
             return {
                 "rebuilt": rebuilt,
                 "emotion_changed": emotion_changed,
                 "llm_changed": llm_changed,
                 "jobs_queue_changed": jobs_queue_changed,
                 "scheduler_changed": scheduler_changed,
+                "delayed_task_changed": delayed_task_changed,
             }
 
 
