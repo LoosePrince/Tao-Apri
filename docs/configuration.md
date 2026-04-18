@@ -74,8 +74,8 @@
 
 - `RHYTHM__ENABLED`：是否启用节奏控制
 - `RHYTHM__SILENCE_SECONDS`：输入静默判定阈值
-- `RHYTHM__ENABLE_MAX_THINK_SECONDS`：是否启用最大等待时间
-- `RHYTHM__MAX_THINK_SECONDS`：最大等待时间
+- `RHYTHM__ENABLE_MAX_THINK_SECONDS`：是否启用单轮 `MAX_THINK` 截断；为 `false` 时批处理线程会一直等到模型调用结束，不再返回“思考超时”占位文案（若整体仍超过 `RHYTHM__WAIT_TIMEOUT_SECONDS`，外层等待会抛超时）
+- `RHYTHM__MAX_THINK_SECONDS`：启用 `ENABLE_MAX_THINK` 时，单轮批处理执行的上限（秒）
 - `RHYTHM__COOLDOWN_SECONDS`：批次处理冷却时间
 - `RHYTHM__SINGLE_MESSAGE_CHAR_THRESHOLD`：单条消息字符阈值
 - `RHYTHM__SINGLE_MESSAGE_TOKEN_THRESHOLD`：单条消息 token 阈值

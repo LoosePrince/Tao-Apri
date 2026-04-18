@@ -357,18 +357,17 @@ class ConversationWindowManager:
                 daemon=True,
             ).start()
 
+            # When max-think is disabled, do not synthesize an inner "思考超时" reply: the
+            # batch thread may still complete and persist while this wait would otherwise
+            # return early (see docs/configuration.md). Total wall time remains capped by
+            # `wait_timeout_seconds` on the outer waiter in `_enqueue_and_wait`.
             if settings.rhythm.enable_max_think_seconds:
-                batch_timeout = settings.rhythm.max_think_seconds
+                timed_out = not finished.wait(timeout=settings.rhythm.max_think_seconds)
             else:
-                batch_timeout = max(
-                    1.0,
-                    settings.rhythm.wait_timeout_seconds
-                    - settings.rhythm.silence_seconds
-                    - settings.rhythm.cooldown_seconds
-                    - 0.5,
-                )
+                finished.wait()
+                timed_out = False
 
-            if not finished.wait(timeout=batch_timeout):
+            if timed_out:
                 self.metrics.inc("max_think_timeout_count")
                 result = _fallback_timeout_result()
             else:

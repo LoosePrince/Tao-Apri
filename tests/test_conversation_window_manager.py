@@ -1,10 +1,13 @@
+import time
+
+import pytest
+
 from app.core.config import settings
 from app.core.metrics import MetricsRegistry
 from app.domain.conversation_scope import ConversationScope
 from app.domain.group_conversation_hints import GroupConversationHints
 from app.services.chat_orchestrator import ChatResult
 from app.services.conversation_window_manager import ConversationWindowManager
-import pytest
 
 
 def test_window_lock_and_handover() -> None:
@@ -38,6 +41,48 @@ def test_window_lock_and_handover() -> None:
         mgr.stop()
         settings.rhythm.silence_seconds = old_silence
         settings.rhythm.wait_timeout_seconds = old_wait
+
+
+def test_window_disable_max_think_does_not_fake_timeout_on_slow_batch() -> None:
+    """Previously, max-think off still used a derived finite wait and could return the
+    placeholder timeout reply while the executor kept running."""
+    old_silence = settings.rhythm.silence_seconds
+    old_wait = settings.rhythm.wait_timeout_seconds
+    old_cooldown = settings.rhythm.cooldown_seconds
+    old_max_think = settings.rhythm.enable_max_think_seconds
+
+    settings.rhythm.silence_seconds = 0.05
+    settings.rhythm.wait_timeout_seconds = 12.0
+    settings.rhythm.cooldown_seconds = 0.0
+    settings.rhythm.enable_max_think_seconds = False
+
+    def _executor(
+        scope: ConversationScope,
+        batch: list[str],
+        abort_requested: bool,
+        nickname: str | None,
+        source_message_id: str | None,
+        attachments: list[dict[str, object]],
+        _hints: GroupConversationHints,
+    ) -> ChatResult:
+        del scope, abort_requested, nickname, source_message_id, attachments, _hints, batch
+        # Old inner budget was wait - silence - cooldown - 0.5 ≈ 11.45s; stay above that.
+        time.sleep(11.6)
+        return ChatResult(session_id="slow-ok", reply="done", session_emotion=0.0, global_emotion=0.0)
+
+    mgr = ConversationWindowManager(batch_executor=_executor, metrics=MetricsRegistry())
+    mgr.start()
+    try:
+        scope = ConversationScope.private(platform="test", user_id="u-slow-maxthink-off")
+        result = mgr.process_user_message(scope=scope, user_message="ping")
+        assert result.reply == "done"
+        assert result.session_id == "slow-ok"
+    finally:
+        mgr.stop()
+        settings.rhythm.silence_seconds = old_silence
+        settings.rhythm.wait_timeout_seconds = old_wait
+        settings.rhythm.cooldown_seconds = old_cooldown
+        settings.rhythm.enable_max_think_seconds = old_max_think
 
 
 def test_window_batch_executor_exception_recovers_state() -> None:
