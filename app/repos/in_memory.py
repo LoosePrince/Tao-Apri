@@ -241,3 +241,20 @@ class InMemoryDelayedTaskRepo(DelayedTaskRepo):
 
     def get(self, task_id: str) -> DelayedTask | None:
         return self._tasks.get(task_id)
+
+    def list_tasks(
+        self,
+        *,
+        scope_id: str | None = None,
+        status: str | None = None,
+        limit: int = 20,
+    ) -> list[DelayedTask]:
+        tasks = list(self._tasks.values())
+        if scope_id and scope_id.strip():
+            scoped = scope_id.strip()
+            tasks = [task for task in tasks if task.scope_id == scoped]
+        if status and status.strip():
+            wanted = status.strip()
+            tasks = [task for task in tasks if task.status == wanted]
+        tasks.sort(key=lambda item: item.run_at, reverse=True)
+        return tasks[: max(1, min(200, limit))]

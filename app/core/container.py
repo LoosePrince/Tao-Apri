@@ -36,7 +36,14 @@ from app.services.window_preprocessor import WindowPreprocessor
 from app.domain.conversation_scope import ConversationScope
 from app.services.channel_sender import ChannelRouter
 from app.tool_runtime.audit import SendRateLimiter
-from app.tool_runtime.builtin_tools import QueryMessagesTool, ScheduleDelayedTaskTool, SearchMemoryTool, SendMessageTool
+from app.tool_runtime.builtin_tools import (
+    CancelDelayedTaskTool,
+    QueryDelayedTasksTool,
+    QueryMessagesTool,
+    ScheduleDelayedTaskTool,
+    SearchMemoryTool,
+    SendMessageTool,
+)
 from app.tool_runtime.registry import ToolRegistry
 from app.tool_runtime.runtime import ToolRuntime
 
@@ -63,6 +70,18 @@ class Container:
         )
         registry.register(
             ScheduleDelayedTaskTool(
+                delayed_task_repo=self.delayed_task_repo,
+                viewer_scope=scope,
+            )
+        )
+        registry.register(
+            QueryDelayedTasksTool(
+                delayed_task_repo=self.delayed_task_repo,
+                viewer_scope=scope,
+            )
+        )
+        registry.register(
+            CancelDelayedTaskTool(
                 delayed_task_repo=self.delayed_task_repo,
                 viewer_scope=scope,
             )

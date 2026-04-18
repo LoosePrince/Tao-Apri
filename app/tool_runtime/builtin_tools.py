@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 import json
+import re
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.core.config import settings
 from app.domain.conversation_scope import ConversationScope
@@ -202,33 +204,45 @@ class ScheduleDelayedTaskTool:
             input_schema={
                 "type": "object",
                 "properties": {
-                    "delay_seconds": {"type": "integer", "minimum": 1},
-                    "run_at": {"type": "string"},
+                    "time": {"type": "string"},
                     "description": {"type": "string"},
                     "reason": {"type": "string"},
                     "trigger_source": {"type": "string"},
                     "task_payload": {"type": "object"},
                 },
-                "required": ["description", "reason", "trigger_source"],
+                "required": ["time", "description", "reason", "trigger_source"],
             },
             read_only=False,
             concurrency_safe=False,
         )
 
     @staticmethod
-    def _parse_run_at(*, delay_seconds: int | None, run_at: str | None) -> datetime:
-        has_delay = delay_seconds is not None
-        has_run_at = bool((run_at or "").strip())
-        if has_delay == has_run_at:
-            raise ValueError("exactly one of delay_seconds or run_at is required")
-        now = datetime.now(timezone.utc)
-        if has_delay:
-            seconds = max(1, int(delay_seconds or 0))
-            return now + timedelta(seconds=seconds)
-        parsed = datetime.fromisoformat(str(run_at).strip())
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
-        return parsed.astimezone(timezone.utc)
+    def _configured_timezone() -> ZoneInfo:
+        try:
+            return ZoneInfo(settings.app.timezone)
+        except ZoneInfoNotFoundError:
+            return ZoneInfo("UTC")
+
+    @classmethod
+    def _parse_run_at(cls, *, time_expr: str) -> datetime:
+        expr = time_expr.strip()
+        if not expr:
+            raise ValueError("time is required")
+        relative = re.fullmatch(r"(?i)\s*(\d+)\s*([smhd])\s*", expr)
+        if relative:
+            value = int(relative.group(1))
+            unit = relative.group(2).lower()
+            seconds_map = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+            return datetime.now(UTC) + timedelta(seconds=value * seconds_map[unit])
+        try:
+            parsed_local = datetime.strptime(expr, "%Y.%m.%d %H:%M:%S")
+        except ValueError as exc:
+            raise ValueError(
+                "invalid time format. use relative like 2h/30m/45s/1d "
+                "or absolute like 2026.4.18 17:23:59 (interpreted in configured timezone)."
+            ) from exc
+        tz = cls._configured_timezone()
+        return parsed_local.replace(tzinfo=tz).astimezone(UTC)
 
     def call(self, payload: dict[str, Any]) -> ToolResult:
         description = str(payload.get("description", "")).strip()
@@ -242,10 +256,7 @@ class ScheduleDelayedTaskTool:
                 error="description, reason and trigger_source are required",
             )
         try:
-            run_at = self._parse_run_at(
-                delay_seconds=payload.get("delay_seconds"),
-                run_at=str(payload.get("run_at", "")).strip() or None,
-            )
+            run_at = self._parse_run_at(time_expr=str(payload.get("time", "")).strip())
         except Exception as exc:
             return ToolResult(tool_name="schedule_delayed_task", call_id="", ok=False, error=str(exc))
 
@@ -286,4 +297,95 @@ class ScheduleDelayedTaskTool:
                 "scheduled_at": datetime.now(UTC).isoformat(),
                 "normalized_run_at": created.run_at.isoformat(),
             },
+        )
+
+
+@dataclass(slots=True)
+class CancelDelayedTaskTool:
+    delayed_task_repo: DelayedTaskRepo
+    viewer_scope: ConversationScope
+
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            name="cancel_delayed_task",
+            description="取消指定延时任务",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string"},
+                },
+                "required": ["task_id"],
+            },
+            read_only=False,
+            concurrency_safe=False,
+        )
+
+    def call(self, payload: dict[str, Any]) -> ToolResult:
+        task_id = str(payload.get("task_id", "")).strip()
+        if not task_id:
+            return ToolResult(tool_name="cancel_delayed_task", call_id="", ok=False, error="task_id is required")
+        existing = self.delayed_task_repo.get(task_id)
+        if existing is None:
+            return ToolResult(tool_name="cancel_delayed_task", call_id="", ok=False, error="task not found")
+        if existing.scope_id and existing.scope_id != self.viewer_scope.scope_id:
+            return ToolResult(tool_name="cancel_delayed_task", call_id="", ok=False, error="task scope mismatch")
+        self.delayed_task_repo.cancel(task_id)
+        return ToolResult(
+            tool_name="cancel_delayed_task",
+            call_id="",
+            ok=True,
+            data={"task_id": task_id, "status": "cancelled"},
+        )
+
+
+@dataclass(slots=True)
+class QueryDelayedTasksTool:
+    delayed_task_repo: DelayedTaskRepo
+    viewer_scope: ConversationScope
+
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            name="query_delayed_tasks",
+            description="查询当前会话或指定范围的延时任务",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "scope_id": {"type": "string"},
+                    "status": {"type": "string"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 200},
+                },
+            },
+            read_only=True,
+            concurrency_safe=True,
+        )
+
+    def call(self, payload: dict[str, Any]) -> ToolResult:
+        scope_id = str(payload.get("scope_id", "")).strip() or self.viewer_scope.scope_id
+        status = str(payload.get("status", "")).strip() or None
+        limit = int(payload.get("limit") or 20)
+        tasks = self.delayed_task_repo.list_tasks(
+            scope_id=scope_id,
+            status=status,
+            limit=max(1, min(200, limit)),
+        )
+        rows = [
+            {
+                "task_id": task.task_id,
+                "scope_id": task.scope_id,
+                "status": task.status,
+                "run_at": task.run_at.isoformat(),
+                "description": task.description,
+                "reason": task.reason,
+                "trigger_source": task.trigger_source,
+                "attempt_count": task.attempt_count,
+                "max_attempts": task.max_attempts,
+                "last_error": task.last_error,
+            }
+            for task in tasks
+        ]
+        return ToolResult(
+            tool_name="query_delayed_tasks",
+            call_id="",
+            ok=True,
+            data={"tasks": rows},
         )

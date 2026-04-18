@@ -13,6 +13,7 @@ from app.jobs.task_queue import TaskQueue
 from app.repos.in_memory import InMemoryDelayedTaskRepo
 from app.repos.sqlite_repo import SQLiteDelayedTaskRepo, SQLiteStore
 from app.tool_runtime.builtin_tools import ScheduleDelayedTaskTool
+from app.tool_runtime.builtin_tools import CancelDelayedTaskTool, QueryDelayedTasksTool
 
 
 def test_sqlite_delayed_task_repo_claim_and_mark_done():
@@ -54,7 +55,7 @@ def test_schedule_delayed_task_tool_accepts_delay_seconds():
     )
     result = tool.call(
         {
-            "delay_seconds": 30,
+            "time": "30s",
             "description": "30秒后提醒",
             "reason": "测试定时",
             "trigger_source": "unit-test",
@@ -67,6 +68,41 @@ def test_schedule_delayed_task_tool_accepts_delay_seconds():
     assert created is not None
     assert created.description == "30秒后提醒"
     assert created.trigger_source == "unit-test"
+
+
+def test_schedule_delayed_task_tool_accepts_absolute_time_format():
+    repo = InMemoryDelayedTaskRepo()
+    tool = ScheduleDelayedTaskTool(
+        delayed_task_repo=repo,
+        viewer_scope=ConversationScope.private(platform="test", user_id="u-1"),
+    )
+    result = tool.call(
+        {
+            "time": "2026.4.18 17:23:59",
+            "description": "绝对时间提醒",
+            "reason": "测试绝对时间",
+            "trigger_source": "unit-test",
+        }
+    )
+    assert result.ok is True
+
+
+def test_schedule_delayed_task_tool_rejects_invalid_time_format():
+    repo = InMemoryDelayedTaskRepo()
+    tool = ScheduleDelayedTaskTool(
+        delayed_task_repo=repo,
+        viewer_scope=ConversationScope.private(platform="test", user_id="u-1"),
+    )
+    result = tool.call(
+        {
+            "time": "2026-04-18T17:23:59+08:00",
+            "description": "无效格式",
+            "reason": "测试无效格式",
+            "trigger_source": "unit-test",
+        }
+    )
+    assert result.ok is False
+    assert "invalid time format" in result.error
 
 
 def test_delayed_task_scheduler_executes_due_task():
@@ -106,3 +142,32 @@ def test_delayed_task_scheduler_executes_due_task():
     done = repo.get("task-due")
     assert done is not None
     assert done.status == "done"
+
+
+def test_query_and_cancel_delayed_task_tools():
+    repo = InMemoryDelayedTaskRepo()
+    now = datetime.now(UTC)
+    task = DelayedTask(
+        task_id="task-query-1",
+        run_at=now + timedelta(minutes=5),
+        status="pending",
+        description="query-test",
+        reason="test",
+        trigger_source="unit",
+        payload_json="{}",
+        scope_id="private:u-1",
+    )
+    repo.enqueue(task)
+    scope = ConversationScope.private(platform="test", user_id="u-1")
+    query_tool = QueryDelayedTasksTool(delayed_task_repo=repo, viewer_scope=scope)
+    query_result = query_tool.call({"status": "pending", "limit": 10})
+    assert query_result.ok is True
+    assert query_result.data["tasks"]
+    assert query_result.data["tasks"][0]["task_id"] == "task-query-1"
+
+    cancel_tool = CancelDelayedTaskTool(delayed_task_repo=repo, viewer_scope=scope)
+    cancel_result = cancel_tool.call({"task_id": "task-query-1"})
+    assert cancel_result.ok is True
+    cancelled = repo.get("task-query-1")
+    assert cancelled is not None
+    assert cancelled.status == "cancelled"

@@ -5,9 +5,11 @@ import re
 import threading
 import base64
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from openai import OpenAI
 
+from app.core.clock import now_local
 from app.core.config import settings
 from app.core.markdown_assets import read_required_markdown_asset
 from app.core.rule_lexicons import allowed_topic_labels
@@ -593,6 +595,8 @@ class LLMClient:
         tool_specs: list[dict[str, object]],
         tool_results: list[dict[str, object]],
     ) -> ToolLoopDecision:
+        local_now = now_local()
+        utc_now = datetime.now(timezone.utc)
         data = self._call_json_decider(
             system_asset="prompt/ai_tool_loop_system.md",
             user_asset="prompt/ai_tool_loop_user.md",
@@ -600,6 +604,10 @@ class LLMClient:
                 "user_message": user_message,
                 "tool_specs_json": json.dumps(tool_specs, ensure_ascii=False),
                 "tool_results_json": json.dumps(tool_results, ensure_ascii=False),
+                "current_local_time": local_now.isoformat(),
+                "current_local_date": local_now.date().isoformat(),
+                "current_local_timezone": str(local_now.tzinfo or settings.app.timezone),
+                "current_utc_time": utc_now.isoformat(),
             },
         )
         final_reply = str(data.get("final_reply", "")).strip()

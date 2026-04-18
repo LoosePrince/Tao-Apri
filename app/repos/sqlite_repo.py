@@ -1132,3 +1132,29 @@ class SQLiteDelayedTaskRepo(DelayedTaskRepo):
         if not row:
             return None
         return self._to_task(row)
+
+    def list_tasks(
+        self,
+        *,
+        scope_id: str | None = None,
+        status: str | None = None,
+        limit: int = 20,
+    ) -> list[DelayedTask]:
+        where_parts: list[str] = []
+        params: list[object] = []
+        if scope_id and scope_id.strip():
+            where_parts.append("scope_id = ?")
+            params.append(scope_id.strip())
+        if status and status.strip():
+            where_parts.append("status = ?")
+            params.append(status.strip())
+        where_sql = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+        query = f"""
+            SELECT * FROM delayed_tasks
+            {where_sql}
+            ORDER BY run_at DESC
+            LIMIT ?
+        """
+        params.append(max(1, min(200, limit)))
+        rows = self.store.conn.execute(query, tuple(params)).fetchall()
+        return [self._to_task(row) for row in rows]

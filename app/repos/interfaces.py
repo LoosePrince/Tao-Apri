@@ -112,3 +112,12 @@ class DelayedTaskRepo(ABC):
 
     @abstractmethod
     def get(self, task_id: str) -> DelayedTask | None: ...
+
+    @abstractmethod
+    def list_tasks(
+        self,
+        *,
+        scope_id: str | None = None,
+        status: str | None = None,
+        limit: int = 20,
+    ) -> list[DelayedTask]: ...
