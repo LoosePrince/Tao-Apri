@@ -145,11 +145,13 @@ def test_onebot_group_whitelist_allows_without_mention(monkeypatch) -> None:
             *,
             scope: ConversationScope,
             user_text: str,
+            attachments: list[dict[str, object]] | None = None,
+            source_message_id: str | None = None,
             nickname: str | None = None,
             group_bot_mentioned: bool | None = None,
             group_allow_autonomous: bool | None = None,
         ) -> None:
-            del ws, user_text, nickname, group_bot_mentioned, group_allow_autonomous
+            del ws, user_text, attachments, source_message_id, nickname, group_bot_mentioned, group_allow_autonomous
             self.scopes.append(scope.scope_id)
 
     client = _Inspectable()

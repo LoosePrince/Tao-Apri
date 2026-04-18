@@ -67,6 +67,12 @@ class UserRelation:
     trust_score: float = 0.0
     intimacy_score: float = 0.0
     dependency_score: float = 0.0
+    # 多标签身份/关系语义（如 developer、friend）；与数值字段并行存在
+    relation_tags: list[str] = field(default_factory=list)
+    # 主导身份标签，便于策略与提示词读取
+    role_priority: str = "neutral"
+    # 关系紧张度边界：normal | warn | restricted
+    boundary_state: str = "normal"
     updated_at: datetime | None = None
 
 

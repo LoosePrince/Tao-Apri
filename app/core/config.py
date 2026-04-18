@@ -126,6 +126,35 @@ class ImageUnderstandingConfig(BaseModel):
     merge_strategy: str = "ocr_plus_vision"
 
 
+class RelationPolicyConfig(BaseModel):
+    """用户↔杏桃关系：多标签 + 边界阈值 + 开发者账号注入。"""
+
+    enabled: bool = True
+    allowed_tags: list[str] = Field(
+        default_factory=lambda: [
+            "developer",
+            "friend",
+            "close_friend",
+            "neutral",
+            "acquaintance",
+            "strained",
+        ]
+    )
+    role_priority_allowed: list[str] = Field(
+        default_factory=lambda: ["neutral", "developer", "friend", "close_friend", "strained"]
+    )
+    default_role_priority: str = "neutral"
+    default_boundary_state: str = "normal"
+    developer_user_ids: list[str] = Field(default_factory=list)
+    promote_developer_role_priority: bool = True
+    restricted_on_negative_polarity: bool = True
+    boundary_warn_trust_below: float = Field(0.35, ge=0.0, le=1.0)
+    boundary_restricted_trust_below: float = Field(0.15, ge=0.0, le=1.0)
+    high_intimacy_tone_hint_above: float = Field(0.72, ge=0.0, le=1.0)
+    group_skip_when_restricted_without_mention: bool = False
+    group_restricted_skip_trust_below: float = Field(0.12, ge=0.0, le=1.0)
+
+
 class ToolRuntimeConfig(BaseModel):
     enabled: bool = False
     max_rounds: int = Field(default=4, ge=1, le=12)
@@ -166,6 +195,7 @@ class Settings(BaseSettings):
     vision: VisionConfig = VisionConfig()
     image_understanding: ImageUnderstandingConfig = ImageUnderstandingConfig()
     tools: ToolRuntimeConfig = ToolRuntimeConfig()
+    relation: RelationPolicyConfig = RelationPolicyConfig()
     delayed_task: DelayedTaskConfig = DelayedTaskConfig()
 
     model_config = SettingsConfigDict(
@@ -204,6 +234,7 @@ def _behavior_specs_json_path() -> Path:
 def _current_behavior_parameter_values() -> dict[str, str]:
     emotion = settings.emotion
     retrieval = settings.retrieval
+    relation = settings.relation
     llm = settings.llm
     rhythm = settings.rhythm
     session = settings.session
@@ -224,6 +255,10 @@ def _current_behavior_parameter_values() -> dict[str, str]:
         "RETRIEVAL__CROSS_NEUTRAL_THRESHOLD": f"{retrieval.cross_neutral_threshold:.3f}",
         "RETRIEVAL__CROSS_NEGATIVE_THRESHOLD": f"{retrieval.cross_negative_threshold:.3f}",
         "RETRIEVAL__RELATION_ACCESS_MIN_STRENGTH": f"{retrieval.relation_access_min_strength:.3f}",
+        "RELATION__ENABLED": str(relation.enabled).lower(),
+        "RELATION__BOUNDARY_WARN_TRUST_BELOW": f"{relation.boundary_warn_trust_below:.3f}",
+        "RELATION__BOUNDARY_RESTRICTED_TRUST_BELOW": f"{relation.boundary_restricted_trust_below:.3f}",
+        "RELATION__DEVELOPER_USER_IDS": ",".join(str(x) for x in relation.developer_user_ids),
         "PERSONA__NAME": persona.name,
         "PERSONA__POLICY_NOTICE_ON_FIRST_TURN": str(persona.policy_notice_on_first_turn).lower(),
         "PERSONA__ASSETS_DIR": persona.assets_dir,

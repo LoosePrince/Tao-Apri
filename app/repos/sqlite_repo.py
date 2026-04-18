@@ -136,6 +136,9 @@ class SQLiteStore:
                 trust_score REAL NOT NULL,
                 intimacy_score REAL NOT NULL DEFAULT 0,
                 dependency_score REAL NOT NULL DEFAULT 0,
+                relation_tags_json TEXT NOT NULL DEFAULT '[]',
+                role_priority TEXT NOT NULL DEFAULT 'neutral',
+                boundary_state TEXT NOT NULL DEFAULT 'normal',
                 updated_at TEXT NOT NULL,
                 PRIMARY KEY (source_user_id, target_user_id)
             );
@@ -295,6 +298,18 @@ class SQLiteStore:
         if "dependency_score" not in relation_columns:
             self.conn.execute(
                 "ALTER TABLE user_relations ADD COLUMN dependency_score REAL NOT NULL DEFAULT 0"
+            )
+        if "relation_tags_json" not in relation_columns:
+            self.conn.execute(
+                "ALTER TABLE user_relations ADD COLUMN relation_tags_json TEXT NOT NULL DEFAULT '[]'"
+            )
+        if "role_priority" not in relation_columns:
+            self.conn.execute(
+                "ALTER TABLE user_relations ADD COLUMN role_priority TEXT NOT NULL DEFAULT 'neutral'"
+            )
+        if "boundary_state" not in relation_columns:
+            self.conn.execute(
+                "ALTER TABLE user_relations ADD COLUMN boundary_state TEXT NOT NULL DEFAULT 'normal'"
             )
         profile_columns = {
             row["name"]
@@ -797,7 +812,8 @@ class SQLiteRelationRepo(RelationRepo):
     def get(self, source_user_id: str, target_user_id: str) -> UserRelation | None:
         row = self.store.conn.execute(
             """
-            SELECT source_user_id, target_user_id, polarity, strength, trust_score, intimacy_score, dependency_score, updated_at
+            SELECT source_user_id, target_user_id, polarity, strength, trust_score, intimacy_score, dependency_score,
+                   relation_tags_json, role_priority, boundary_state, updated_at
             FROM user_relations
             WHERE source_user_id = ? AND target_user_id = ?
             """,
@@ -805,6 +821,14 @@ class SQLiteRelationRepo(RelationRepo):
         ).fetchone()
         if not row:
             return None
+        tags_raw = row["relation_tags_json"] if "relation_tags_json" in row.keys() else "[]"
+        try:
+            parsed_tags = json.loads(tags_raw or "[]")
+            relation_tags = [str(t).strip() for t in parsed_tags if str(t).strip()] if isinstance(parsed_tags, list) else []
+        except json.JSONDecodeError:
+            relation_tags = []
+        role_priority = str(row["role_priority"] or "neutral").strip() if "role_priority" in row.keys() else "neutral"
+        boundary_state = str(row["boundary_state"] or "normal").strip() if "boundary_state" in row.keys() else "normal"
         return UserRelation(
             source_user_id=row["source_user_id"],
             target_user_id=row["target_user_id"],
@@ -813,23 +837,31 @@ class SQLiteRelationRepo(RelationRepo):
             trust_score=float(row["trust_score"]),
             intimacy_score=float(row["intimacy_score"]),
             dependency_score=float(row["dependency_score"]),
+            relation_tags=relation_tags,
+            role_priority=role_priority or "neutral",
+            boundary_state=boundary_state or "normal",
             updated_at=_parse_dt(row["updated_at"]),
         )
 
     def upsert(self, relation: UserRelation) -> UserRelation:
         now = _now_iso()
+        tags_json = json.dumps(relation.relation_tags, ensure_ascii=False)
         self.store.conn.execute(
             """
             INSERT INTO user_relations (
-                source_user_id, target_user_id, polarity, strength, trust_score, intimacy_score, dependency_score, updated_at
+                source_user_id, target_user_id, polarity, strength, trust_score, intimacy_score, dependency_score,
+                relation_tags_json, role_priority, boundary_state, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(source_user_id, target_user_id) DO UPDATE SET
                 polarity = excluded.polarity,
                 strength = excluded.strength,
                 trust_score = excluded.trust_score,
                 intimacy_score = excluded.intimacy_score,
                 dependency_score = excluded.dependency_score,
+                relation_tags_json = excluded.relation_tags_json,
+                role_priority = excluded.role_priority,
+                boundary_state = excluded.boundary_state,
                 updated_at = excluded.updated_at
             """,
             (
@@ -840,6 +872,9 @@ class SQLiteRelationRepo(RelationRepo):
                 relation.trust_score,
                 relation.intimacy_score,
                 relation.dependency_score,
+                tags_json,
+                relation.role_priority,
+                relation.boundary_state,
                 now,
             ),
         )

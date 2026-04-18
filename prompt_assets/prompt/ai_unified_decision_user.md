@@ -9,6 +9,9 @@
 当前关系状态：
 {relation_json}
 
+关系规则边界（与上文关系状态一起综合判断；语气需符合边界）：
+{relation_boundary_context}
+
 当前画像状态：
 {profile_json}
 

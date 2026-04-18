@@ -16,6 +16,13 @@ from app.core.markdown_assets import read_required_markdown_asset
 from app.domain.conversation_scope import ConversationScope
 from app.domain.group_conversation_hints import GroupConversationHints
 from app.domain.models import Message, UserProfile, UserRelation
+from app.domain.relation_policy import (
+    apply_numeric_and_tags_from_decision,
+    ensure_developer_tag,
+    finalize_relation_after_update,
+    relation_to_payload_dict,
+)
+from app.services.relation_boundary import evaluate_relation_boundary
 from app.domain.services.emotion_engine import EmotionEngine
 from app.domain.services.identity_service import IdentityService
 from app.domain.services.memory_writer import MemoryWriter
@@ -286,37 +293,29 @@ class ChatOrchestrator:
             source_user_id=user_id,
             target_user_id=ASSISTANT_RELATION_ID,
         )
-        payload = {
-            "polarity": relation.polarity,
-            "strength": relation.strength,
-            "trust_score": relation.trust_score,
-            "intimacy_score": relation.intimacy_score,
-            "dependency_score": relation.dependency_score,
-        }
+        ensure_developer_tag(relation, user_id=user_id)
+        payload = relation_to_payload_dict(relation)
         # Keep legacy spacing only when strength is exactly 0, so test stubs that
         # look for `"strength": 0` can distinguish first turn from subsequent turns.
         if abs(relation.strength) <= 1e-12:
             relation_json = json.dumps(payload, ensure_ascii=False)
         else:
             relation_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-        decision = relation_update or self.llm_client.evolve_relation_decision(
-            relation_json=relation_json,
-            user_message=user_message,
-            reply=reply,
-        )
-        polarity = str(decision.get("polarity", relation.polarity)).strip()
-        relation.polarity = polarity if polarity in {"positive", "neutral", "negative"} else relation.polarity
-        relation.strength = self._clamp01(float(decision.get("strength", relation.strength) or relation.strength))
-        relation.trust_score = self._clamp01(float(decision.get("trust_score", relation.trust_score) or relation.trust_score))
-        relation.intimacy_score = self._clamp01(
-            float(decision.get("intimacy_score", relation.intimacy_score) or relation.intimacy_score)
-        )
-        relation.dependency_score = self._clamp01(
-            float(decision.get("dependency_score", relation.dependency_score) or relation.dependency_score)
-        )
+        raw_decision: dict[str, object] = {}
+        if relation_update:
+            raw_decision = dict(relation_update)
+        else:
+            evolved = self.llm_client.evolve_relation_decision(
+                relation_json=relation_json,
+                user_message=user_message,
+                reply=reply,
+            )
+            raw_decision = evolved if isinstance(evolved, dict) else {}
+        apply_numeric_and_tags_from_decision(relation, raw_decision)
+        finalize_relation_after_update(relation, user_id=user_id)
         self.relation_repo.upsert(relation)
         logger.info(
-            "Relation evolved | user_id=%s | target=%s | polarity=%s | strength=%.3f | trust=%.3f | intimacy=%.3f | dependency=%.3f",
+            "Relation evolved | user_id=%s | target=%s | polarity=%s | strength=%.3f | trust=%.3f | intimacy=%.3f | dependency=%.3f | tags=%s | role=%s | boundary=%s",
             user_id,
             ASSISTANT_RELATION_ID,
             relation.polarity,
@@ -324,6 +323,9 @@ class ChatOrchestrator:
             relation.trust_score,
             relation.intimacy_score,
             relation.dependency_score,
+            relation.relation_tags,
+            relation.role_priority,
+            relation.boundary_state,
         )
 
     def _persist_profile(self, profile: UserProfile) -> None:
@@ -687,17 +689,32 @@ class ChatOrchestrator:
             source_user_id=user_id,
             target_user_id=ASSISTANT_RELATION_ID,
         )
-        relation_payload = {
-            "polarity": relation.polarity,
-            "strength": relation.strength,
-            "trust_score": relation.trust_score,
-            "intimacy_score": relation.intimacy_score,
-            "dependency_score": relation.dependency_score,
-        }
+        ensure_developer_tag(relation, user_id=user_id)
+        boundary_signal = evaluate_relation_boundary(
+            relation,
+            user_message=user_message,
+            scene_type=scope.scene_type,
+            group_bot_mentioned=gh.bot_mentioned,
+        )
+        if settings.relation.enabled:
+            logger.info(
+                "Relation boundary | user_id=%s | effective=%s | override=%s | reasons=%s",
+                user_id,
+                boundary_signal.effective_boundary,
+                boundary_signal.should_reply_override,
+                boundary_signal.reasons,
+            )
+        relation_payload = dict(relation_to_payload_dict(relation))
+        relation_payload["effective_boundary"] = boundary_signal.effective_boundary
         if abs(relation.strength) <= 1e-12:
             relation_json = json.dumps(relation_payload, ensure_ascii=False)
         else:
             relation_json = json.dumps(relation_payload, ensure_ascii=False, separators=(",", ":"))
+        relation_boundary_context = (
+            "规则边界信号（优先参考语气；若与安全/隐私策略冲突，以后者为准）。\n"
+            f"- 有效边界: {boundary_signal.effective_boundary}\n"
+            f"{boundary_signal.tone_constraints}\n"
+        )
         profile_payload = {
             "profile_summary": profile.profile_summary if profile else "",
             "preference_summary": profile.preference_summary if profile else "",
@@ -720,6 +737,7 @@ class ChatOrchestrator:
                 user_message=user_message,
                 relation_json=relation_json,
                 profile_json=profile_json,
+                relation_boundary_context=relation_boundary_context,
                 session_emotion=emotion_state.session_emotion,
                 global_emotion=emotion_state.global_emotion,
                 memory_count=len(memories),
@@ -737,6 +755,11 @@ class ChatOrchestrator:
             reply = str(getattr(unified, "reply", "")).strip()
             relation_update = getattr(unified, "relation_update", {}) or {}
             profile_update = getattr(unified, "profile_update", {}) or {}
+            if boundary_signal.should_reply_override is False:
+                should_reply = False
+                reply = ""
+                if boundary_signal.skip_reason_if_override:
+                    skip_reason = boundary_signal.skip_reason_if_override
         else:
             should_reply_decider = getattr(self.llm_client, "decide_should_reply", None)
             if callable(should_reply_decider):
