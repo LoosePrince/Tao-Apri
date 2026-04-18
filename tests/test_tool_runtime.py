@@ -87,6 +87,36 @@ class _MissingToolLLMStub:
         return ToolLoopDecision(tool_calls=[ToolCall(tool_name="unknown_tool", input={}, call_id="missing-1")])
 
 
+@dataclass
+class _FlakyTool:
+    name: str = "flaky_tool"
+
+    def __post_init__(self) -> None:
+        self.calls = 0
+
+    def spec(self) -> ToolSpec:
+        return ToolSpec(name=self.name, description="flaky", input_schema={"type": "object"}, concurrency_safe=False)
+
+    def call(self, payload: dict):
+        del payload
+        self.calls += 1
+        if self.calls == 1:
+            raise TimeoutError("temporary timeout")
+        return ToolResult(tool_name=self.name, call_id="", ok=True, data={"ok": True})
+
+
+@dataclass
+class _LargeResultTool:
+    name: str = "large_result_tool"
+
+    def spec(self) -> ToolSpec:
+        return ToolSpec(name=self.name, description="large", input_schema={"type": "object"})
+
+    def call(self, payload: dict):
+        del payload
+        return ToolResult(tool_name=self.name, call_id="", ok=True, data={"blob": "x" * 5000})
+
+
 def test_tool_runtime_loop_executes_until_final_reply():
     registry = ToolRegistry()
     registry.register(_EchoTool())
@@ -194,3 +224,63 @@ def test_tool_runtime_invariant_guard_fills_missing_result_for_unknown_tool():
     assert len(response.tool_results) == 1
     assert response.tool_results[0].call_id == "missing-1"
     assert response.tool_results[0].error_code == "tool_not_found"
+
+
+def test_tool_runtime_retries_retryable_error_then_succeeds():
+    original_attempts = settings.tools.retry_max_attempts
+    try:
+        settings.tools.retry_max_attempts = 2
+        registry = ToolRegistry()
+        flaky = _FlakyTool()
+        registry.register(flaky)
+
+        class _OneCallLLM:
+            def __init__(self) -> None:
+                self._step = 0
+
+            def plan_tool_loop_step(self, *, user_message: str, tool_specs: list[dict], tool_results: list[dict]) -> ToolLoopDecision:
+                del user_message, tool_specs
+                self._step += 1
+                if self._step == 1:
+                    return ToolLoopDecision(tool_calls=[ToolCall(tool_name="flaky_tool", input={}, call_id="f1")])
+                assert tool_results and tool_results[0]["ok"] is True
+                return ToolLoopDecision(final_reply="ok")
+
+        runtime = ToolRuntime(llm_client=_OneCallLLM(), registry=registry)
+        response = runtime.run(ToolRuntimeRequest(scope_id="private:u1", user_message="hi", max_rounds=2))
+        assert response.final_reply == "ok"
+        assert response.tool_results[0].ok is True
+    finally:
+        settings.tools.retry_max_attempts = original_attempts
+
+
+def test_tool_runtime_result_budget_truncates_large_payload():
+    original_per = settings.tools.result_budget_per_tool_chars
+    original_total = settings.tools.result_budget_total_chars
+    try:
+        settings.tools.result_budget_per_tool_chars = 200
+        settings.tools.result_budget_total_chars = 400
+        registry = ToolRegistry()
+        registry.register(_LargeResultTool())
+
+        class _SingleRoundLLM:
+            def __init__(self) -> None:
+                self._step = 0
+
+            def plan_tool_loop_step(self, *, user_message: str, tool_specs: list[dict], tool_results: list[dict]) -> ToolLoopDecision:
+                del user_message, tool_specs, tool_results
+                self._step += 1
+                if self._step == 1:
+                    return ToolLoopDecision(tool_calls=[ToolCall(tool_name="large_result_tool", input={}, call_id="l1")])
+                return ToolLoopDecision(final_reply="done")
+
+        runtime = ToolRuntime(llm_client=_SingleRoundLLM(), registry=registry)
+        response = runtime.run(ToolRuntimeRequest(scope_id="private:u1", user_message="hi", max_rounds=1))
+        assert response.tool_results
+        item = response.tool_results[0]
+        assert item.meta.get("truncated") is True
+        assert item.meta.get("ref_id")
+        assert item.meta.get("original_size", 0) > 200
+    finally:
+        settings.tools.result_budget_per_tool_chars = original_per
+        settings.tools.result_budget_total_chars = original_total

@@ -151,6 +151,7 @@ def _finalize_result(*, context: ToolExecutionContext, input_summary: str, start
         duration_ms=duration_ms,
         input_summary=input_summary,
         error=result.error,
+        error_code=result.error_code,
     )
     return result
 
@@ -183,6 +184,8 @@ def _finalize(
         duration_ms=duration_ms,
         input_summary=input_summary,
         error=error,
+        error_code=error_code,
+        reason=str(error_details.get("reason", "")),
     )
     return result
 

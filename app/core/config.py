@@ -134,6 +134,11 @@ class ToolRuntimeConfig(BaseModel):
     allowed_send_targets: list[str] = Field(default_factory=list)
     send_rate_limit_per_minute: int = Field(default=10, ge=1, le=300)
     non_readonly_permission_behavior: str = "allow"  # allow | ask | deny
+    retry_max_attempts: int = Field(default=2, ge=1, le=5)
+    retry_backoff_seconds: list[float] = Field(default_factory=lambda: [0.2, 0.8, 1.6])
+    retryable_error_codes: list[str] = Field(default_factory=lambda: ["timeout", "execution_failed"])
+    result_budget_per_tool_chars: int = Field(default=4000, ge=256, le=20000)
+    result_budget_total_chars: int = Field(default=12000, ge=1024, le=100000)
 
 
 class DelayedTaskConfig(BaseModel):

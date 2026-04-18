@@ -7,6 +7,7 @@ import threading
 import time
 
 from app.core.config import settings
+from app.core.metrics import MetricsRegistry
 from app.domain.models import DelayedTask
 from app.jobs.task_queue import TaskQueue
 from app.repos.interfaces import DelayedTaskRepo
@@ -21,10 +22,12 @@ class DelayedTaskScheduler:
         repo: DelayedTaskRepo,
         task_queue: TaskQueue,
         executor: Callable[[DelayedTask], None],
+        metrics: MetricsRegistry | None = None,
     ) -> None:
         self.repo = repo
         self.task_queue = task_queue
         self.executor = executor
+        self.metrics = metrics
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._worker_id = f"worker-{id(self)}"
@@ -63,12 +66,16 @@ class DelayedTaskScheduler:
         try:
             self.executor(task)
             self.repo.mark_done(task.task_id)
+            if self.metrics:
+                self.metrics.inc("delayed_task_trigger_total", 1)
             logger.info("Delayed task completed | task_id=%s", task.task_id)
         except Exception as exc:
             attempt = task.attempt_count + 1
             max_attempts = max(1, task.max_attempts)
             if attempt >= max_attempts:
                 self.repo.mark_dead(task_id=task.task_id, last_error=str(exc))
+                if self.metrics:
+                    self.metrics.inc("delayed_task_dead_total", 1)
                 logger.exception("Delayed task dead | task_id=%s | err=%s", task.task_id, exc)
                 return
             backoffs = settings.delayed_task.retry_backoff_seconds or [10.0, 30.0, 60.0]
@@ -79,6 +86,8 @@ class DelayedTaskScheduler:
                 next_run_at_iso=next_run.isoformat(),
                 last_error=str(exc),
             )
+            if self.metrics:
+                self.metrics.inc("delayed_task_retry_total", 1)
             logger.warning(
                 "Delayed task retry scheduled | task_id=%s | attempt=%s | delay=%.1fs | err=%s",
                 task.task_id,

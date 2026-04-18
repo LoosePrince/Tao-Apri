@@ -86,7 +86,7 @@ class Container:
                 viewer_scope=scope,
             )
         )
-        return ToolRuntime(llm_client=self.llm_client, registry=registry)
+        return ToolRuntime(llm_client=self.llm_client, registry=registry, metrics=self.metrics)
 
     def register_channel_sender(self, channel: str, sender: object) -> None:
         self.channel_router.register(channel, sender)  # type: ignore[arg-type]
@@ -175,6 +175,7 @@ class Container:
             repo=self.delayed_task_repo,
             task_queue=self.task_queue,
             executor=self._execute_delayed_task,
+            metrics=self.metrics,
         )
         self.chat_orchestrator = ChatOrchestrator(
             identity_service=self.identity_service,
@@ -359,6 +360,7 @@ class Container:
                     repo=self.delayed_task_repo,
                     task_queue=self.task_queue,
                     executor=self._execute_delayed_task,
+                    metrics=self.metrics,
                 )
                 self.delayed_task_scheduler.start()
                 rebuilt.append("delayed_task_scheduler")

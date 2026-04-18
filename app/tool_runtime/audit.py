@@ -38,13 +38,17 @@ def log_tool_audit(
     duration_ms: int,
     input_summary: str,
     error: str = "",
+    error_code: str = "",
+    reason: str = "",
 ) -> None:
     logger.info(
-        "Tool audit | scope=%s | tool=%s | ok=%s | duration_ms=%s | input=%s | error=%s",
+        "Tool audit | scope=%s | tool=%s | ok=%s | duration_ms=%s | input=%s | error=%s | error_code=%s | reason=%s",
         scope_id,
         tool_name,
         ok,
         duration_ms,
         input_summary,
         error.strip(),
+        error_code.strip(),
+        reason.strip(),
     )

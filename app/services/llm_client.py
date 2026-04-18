@@ -2,7 +2,6 @@ import logging
 import time
 import json
 import re
-import threading
 import base64
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -13,6 +12,8 @@ from app.core.clock import now_local
 from app.core.config import settings
 from app.core.markdown_assets import read_required_markdown_asset
 from app.core.rule_lexicons import allowed_topic_labels
+from app.services.llm_gateway import LLMGateway
+from app.services.prompt_renderer import PromptRenderer
 from app.services.prompt_composer import PromptContext
 from app.tool_runtime.types import ToolCall, ToolLoopDecision
 
@@ -58,23 +59,11 @@ class UnifiedDecision:
 
 class LLMClient:
     def __init__(self) -> None:
-        self._client: OpenAI | None = None
-        self._consecutive_failures = 0
-        self._circuit_open_until = 0.0
-        self._circuit_lock = threading.RLock()
+        self.gateway = LLMGateway()
+        self.prompt_renderer = PromptRenderer()
 
-    @staticmethod
-    def _render_template(template: str, values: dict[str, object]) -> str:
-        # Use a safe placeholder renderer:
-        # - Replace only "{identifier}" placeholders.
-        # - Leave JSON examples like {"should_reply": true|false} intact (do NOT treat them as placeholders).
-        def _replace(match: re.Match[str]) -> str:
-            key = match.group(1)
-            if key in values:
-                return str(values[key])
-            return match.group(0)
-
-        return re.sub(r"\{([a-zA-Z_]\w*)\}", _replace, template)
+    def _render_template(self, template: str, values: dict[str, object]) -> str:
+        return self.prompt_renderer.render(template, values)
 
     @staticmethod
     def _extract_json(raw: str) -> dict[str, object]:
@@ -488,12 +477,11 @@ class LLMClient:
         if self._is_circuit_open():
             logger.warning("Skip list models because circuit is open.")
             return []
-        client = self._get_client()
         try:
             logger.info("Listing models via provider=%s", provider)
-            models = client.models.list()
+            ids = self.gateway.list_models()
             self._on_request_success()
-            return sorted({item.id for item in models.data if getattr(item, "id", None)})
+            return ids
         except Exception as exc:
             logger.warning("Kilo list models failed: %s", exc)
             self._on_request_failure(exc)
@@ -717,33 +705,14 @@ class LLMClient:
         return ""
 
     def _get_client(self) -> OpenAI:
-        if self._client is None:
-            self._client = OpenAI(
-                api_key=settings.llm.api_key,
-                base_url=settings.llm.base_url,
-                timeout=settings.llm.timeout_seconds,
-            )
-        return self._client
+        # Backward compatibility for legacy callsites/tests.
+        return self.gateway._get_client()
 
     def _is_circuit_open(self) -> bool:
-        with self._circuit_lock:
-            return time.monotonic() < self._circuit_open_until
+        return self.gateway.is_circuit_open()
 
     def _on_request_success(self) -> None:
-        with self._circuit_lock:
-            self._consecutive_failures = 0
-            self._circuit_open_until = 0.0
+        self.gateway.on_request_success()
 
     def _on_request_failure(self, exc: Exception) -> None:
-        with self._circuit_lock:
-            self._consecutive_failures += 1
-            threshold = settings.llm.circuit_breaker_failure_threshold
-            if self._consecutive_failures >= threshold:
-                open_seconds = settings.llm.circuit_breaker_open_seconds
-                self._circuit_open_until = time.monotonic() + open_seconds
-                logger.error(
-                    "Circuit breaker opened | failures=%s | open_seconds=%s | reason=%s",
-                    self._consecutive_failures,
-                    open_seconds,
-                    exc,
-                )
+        self.gateway.on_request_failure(exc)
