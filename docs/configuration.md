@@ -83,7 +83,8 @@
 - `RHYTHM__WINDOW_TOKEN_THRESHOLD`：窗口总 token 阈值
 - `RHYTHM__ENABLE_TERMINATE_KEYWORDS`：是否启用中止关键词
 - `RHYTHM__TERMINATE_KEYWORDS`：中止关键词列表
-- `RHYTHM__WAIT_TIMEOUT_SECONDS`：窗口等待超时
+- `RHYTHM__WAIT_TIMEOUT_SECONDS`：窗口等待超时（从入队起算；超时后若本轮批处理仍完成并写入助手消息，则该条助手正文最前会附加 `[此消息超时未成功发送]`，便于历史检索与模型识别“未成功送达”的回复）
+- 若启用 `RHYTHM__ENABLE_MAX_THINK_SECONDS` 且触发单轮思考超时占位，后台仍完成写入时，同样会附加上述前缀
 
 说明：`kilo` provider 使用 OpenAI 官方 Python SDK，以 OpenAI 兼容模式连接 Kilo 网关；当网关不可用时，系统将统一返回“当前不可用，请联系管理员（debug账号）”，不再回退 mock 回复。
 

@@ -127,7 +127,7 @@ class Container:
             metrics=self.metrics,
         )
         self.window_manager = ConversationWindowManager(
-            batch_executor=lambda scope, batch, abort, nickname, source_message_id, attachments, group_hints: self.chat_orchestrator.handle_window_batch(
+            batch_executor=lambda scope, batch, abort, nickname, source_message_id, attachments, group_hints, window_round_id: self.chat_orchestrator.handle_window_batch(
                 scope=scope,
                 user_messages=batch,
                 abort_requested=abort,
@@ -135,6 +135,7 @@ class Container:
                 source_message_id=source_message_id,
                 attachments=attachments,
                 group_hints=group_hints,
+                window_round_id=window_round_id,
             ),
             metrics=self.metrics,
         )

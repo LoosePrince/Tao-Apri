@@ -25,8 +25,9 @@ def test_window_lock_and_handover() -> None:
         source_message_id: str | None,
         attachments: list[dict[str, object]],
         _hints: GroupConversationHints,
+        _window_round_id: int,
     ) -> ChatResult:
-        del scope, abort_requested, nickname, source_message_id, attachments, _hints
+        del scope, abort_requested, nickname, source_message_id, attachments, _hints, _window_round_id
         calls.append(batch)
         return ChatResult(session_id="s1", reply="ok", session_emotion=0.1, global_emotion=0.2)
 
@@ -64,8 +65,9 @@ def test_window_disable_max_think_does_not_fake_timeout_on_slow_batch() -> None:
         source_message_id: str | None,
         attachments: list[dict[str, object]],
         _hints: GroupConversationHints,
+        _window_round_id: int,
     ) -> ChatResult:
-        del scope, abort_requested, nickname, source_message_id, attachments, _hints, batch
+        del scope, abort_requested, nickname, source_message_id, attachments, _hints, _window_round_id, batch
         # Old inner budget was wait - silence - cooldown - 0.5 ≈ 11.45s; stay above that.
         time.sleep(11.6)
         return ChatResult(session_id="slow-ok", reply="done", session_emotion=0.0, global_emotion=0.0)
@@ -107,8 +109,9 @@ def test_window_batch_executor_exception_recovers_state() -> None:
         source_message_id: str | None,
         attachments: list[dict[str, object]],
         _hints: GroupConversationHints,
+        _window_round_id: int,
     ) -> ChatResult:
-        del scope, abort_requested, nickname, source_message_id, attachments, _hints
+        del scope, abort_requested, nickname, source_message_id, attachments, _hints, _window_round_id
         calls.append(batch)
         n["v"] += 1
         if n["v"] == 1:

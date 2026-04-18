@@ -23,8 +23,9 @@ def test_termination_keyword_triggers_new_round() -> None:
         source_message_id: str | None,
         attachments: list[dict[str, object]],
         _hints: GroupConversationHints,
+        _window_round_id: int,
     ) -> ChatResult:
-        del scope, abort_requested, nickname, source_message_id, attachments, _hints
+        del scope, abort_requested, nickname, source_message_id, attachments, _hints, _window_round_id
         calls.append(batch)
         return ChatResult(session_id="s1", reply="ok", session_emotion=0.1, global_emotion=0.2)
 

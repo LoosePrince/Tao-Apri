@@ -11,6 +11,7 @@ from app.core.metrics import MetricsRegistry
 from app.domain.conversation_scope import ConversationScope
 from app.domain.group_conversation_hints import GroupConversationHints
 from app.services.chat_orchestrator import ChatResult
+from app.services.window_delivery_timeout import mark_late_assistant_delivery
 
 logger = logging.getLogger(__name__)
 
@@ -47,18 +48,7 @@ class ConversationWindowManager:
     def __init__(
         self,
         *,
-        batch_executor: Callable[
-            [
-                ConversationScope,
-                list[str],
-                bool,
-                str | None,
-                str | None,
-                list[dict[str, object]],
-                GroupConversationHints,
-            ],
-            ChatResult,
-        ],
+        batch_executor: Callable[..., ChatResult],
         metrics: MetricsRegistry,
     ) -> None:
         self.batch_executor = batch_executor
@@ -198,6 +188,7 @@ class ConversationWindowManager:
                 daemon=True,
             ).start()
         if not waiter.event.wait(timeout=settings.rhythm.wait_timeout_seconds):
+            mark_late_assistant_delivery(scope.scope_id, waiter.target_round)
             raise TimeoutError(f"Conversation window timed out for scope={scope.scope_id}")
         result = waiter.holder.get("result")
         if isinstance(result, Exception):
@@ -345,6 +336,7 @@ class ConversationWindowManager:
                         source_message_id_for_batch,
                         attachments_for_batch,
                         group_hints,
+                        round_id,
                     )
                 except Exception as exc:  # pragma: no cover
                     holder["result"] = exc
@@ -369,6 +361,8 @@ class ConversationWindowManager:
 
             if timed_out:
                 self.metrics.inc("max_think_timeout_count")
+                sid = scope_for_batch.scope_id if scope_for_batch is not None else scope_id
+                mark_late_assistant_delivery(sid, round_id)
                 result = _fallback_timeout_result()
             else:
                 maybe_result = holder["result"]

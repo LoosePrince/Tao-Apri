@@ -18,6 +18,10 @@ from app.domain.models import Message, UserProfile, UserRelation
 from app.domain.services.emotion_engine import EmotionEngine
 from app.domain.services.identity_service import IdentityService
 from app.domain.services.memory_writer import MemoryWriter
+from app.services.window_delivery_timeout import (
+    LATE_ASSISTANT_DELIVERY_PREFIX,
+    consume_late_assistant_delivery,
+)
 from app.domain.services.persona_engine import PersonaEngine
 from app.jobs.task_queue import TaskQueue
 from app.repos.interfaces import MessageRepo, PreferenceRepo, ProfileRepo, RelationRepo, VectorRepo
@@ -425,6 +429,7 @@ class ChatOrchestrator:
         source_message_id: str | None = None,
         attachments: list[dict[str, object]] | None = None,
         group_hints: GroupConversationHints | None = None,
+        window_round_id: int | None = None,
     ) -> ChatResult:
         user_id = scope.actor_user_id
         raw_user_message = "\n".join(msg.strip() for msg in user_messages if msg.strip())
@@ -821,12 +826,15 @@ class ChatOrchestrator:
         )
         logger.debug("User message persisted | user_id=%s | session_id=%s", user_id, session.session_id)
 
+        assistant_content = reply
+        if consume_late_assistant_delivery(scope.scope_id, window_round_id):
+            assistant_content = f"{LATE_ASSISTANT_DELIVERY_PREFIX}\n{reply}"
         self.memory_writer.write(
             scope=scope,
             session_id=session.session_id,
             user_id=user_id,
             role="assistant",
-            content=reply,
+            content=assistant_content,
             emotion_score=emotion_state.session_emotion,
             source_message_id=None,
         )
