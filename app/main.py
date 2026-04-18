@@ -81,6 +81,7 @@ async def lifespan(app: FastAPI):
     )
     container.register_channel_sender("qq", OneBotChannelSender(onebot_service=onebot_service))
     container.register_channel_sender("onebot", OneBotChannelSender(onebot_service=onebot_service))
+    container.onebot_service = onebot_service
     try:
         yield
     finally:

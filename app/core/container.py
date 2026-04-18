@@ -1,54 +1,48 @@
-from urllib.parse import urlparse
-from typing import TYPE_CHECKING
 import json
+import logging
+from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
 from app.core.config import settings
 from app.core.metrics import MetricsRegistry
+from app.domain.conversation_scope import ConversationScope
 from app.domain.services.emotion_engine import EmotionEngine
 from app.domain.services.identity_service import IdentityService
 from app.domain.services.memory_writer import MemoryWriter
 from app.domain.services.persona_engine import PersonaEngine
-from app.jobs.emotion_aggregator import EmotionAggregatorJob
 from app.jobs.delayed_task_scheduler import DelayedTaskScheduler
+from app.jobs.emotion_aggregator import EmotionAggregatorJob
 from app.jobs.periodic_scheduler import PeriodicScheduler
 from app.jobs.task_queue import TaskQueue
 from app.repos.in_memory import InMemoryVectorRepo
-from app.repos.sqlite_repo import (
-    SQLiteEmotionStateRepo,
-    SQLiteDelayedTaskRepo,
-    SQLiteFactRepo,
-    SQLiteMessageRepo,
-    SQLitePreferenceRepo,
-    SQLiteProfileRepo,
-    SQLiteRelationRepo,
-    SQLiteSessionRepo,
-    SQLiteStore,
-    SQLiteUserRepo,
-    SQLiteVectorRepo,
-)
+from app.repos.sqlite_repo import (SQLiteDelayedTaskRepo,
+                                   SQLiteEmotionStateRepo, SQLiteFactRepo,
+                                   SQLiteMessageRepo, SQLitePreferenceRepo,
+                                   SQLiteProfileRepo, SQLiteRelationRepo,
+                                   SQLiteSessionRepo, SQLiteStore,
+                                   SQLiteUserRepo, SQLiteVectorRepo)
+from app.services.channel_sender import ChannelRouter
 from app.services.chat_orchestrator import ChatOrchestrator
 from app.services.conversation_window_manager import ConversationWindowManager
-from app.services.llm_client import LLMClient
 from app.services.image_understanding_service import ImageUnderstandingService
+from app.services.llm_client import LLMClient
 from app.services.prompt_composer import PromptComposer
 from app.services.retrieval_policy_service import RetrievalPolicyService
 from app.services.window_preprocessor import WindowPreprocessor
-from app.domain.conversation_scope import ConversationScope
-from app.services.channel_sender import ChannelRouter
 from app.tool_runtime.audit import SendRateLimiter
-from app.tool_runtime.builtin_tools import (
-    CancelDelayedTaskTool,
-    QueryDelayedTasksTool,
-    QueryMessagesTool,
-    ScheduleDelayedTaskTool,
-    SearchMemoryTool,
-    SendMessageTool,
-)
+from app.tool_runtime.builtin_tools import (CancelDelayedTaskTool,
+                                            QueryDelayedTasksTool,
+                                            QueryMessagesTool,
+                                            ScheduleDelayedTaskTool,
+                                            SearchMemoryTool, SendMessageTool)
 from app.tool_runtime.registry import ToolRegistry
 from app.tool_runtime.runtime import ToolRuntime
 
 if TYPE_CHECKING:
     from app.core.config import Settings
+
+
+logger = logging.getLogger(__name__)
 
 
 class Container:
@@ -109,6 +103,8 @@ class Container:
         import threading
 
         self._lock = threading.RLock()
+        # Set from app lifespan after OneBot WS is up; required to push delayed-task replies to QQ.
+        self.onebot_service: Any = None
         self.store = SQLiteStore(self._resolve_sqlite_db_path())
         self.user_repo = SQLiteUserRepo(self.store)
         self.session_repo = SQLiteSessionRepo(self.store)
@@ -232,9 +228,10 @@ class Container:
         else:
             scope = ConversationScope.private(platform=platform, user_id=user_id)
         synthetic_message = (
-            f"[延时任务触发]\\n任务ID: {task.task_id}\\n触发源: {trigger_source}\\n原因: {reason}\\n任务描述: {task.description}\\n执行内容: {message}"
+            f"[延时任务触发]\n任务ID: {task.task_id}\n触发源: {trigger_source}\n原因: {reason}\n"
+            f"任务描述: {task.description}\n执行内容: {message}"
         )
-        self.chat_orchestrator.handle_window_batch(
+        result = self.chat_orchestrator.handle_window_batch(
             scope=scope,
             user_messages=[synthetic_message],
             abort_requested=False,
@@ -244,6 +241,45 @@ class Container:
             group_hints=None,
             window_round_id=None,
         )
+        self._send_delayed_task_reply_to_onebot(scope=scope, reply=result.reply, task_id=task.task_id)
+
+    def _send_delayed_task_reply_to_onebot(
+        self,
+        *,
+        scope: ConversationScope,
+        reply: str,
+        task_id: str,
+    ) -> None:
+        """Delayed tasks bypass ConversationWindowManager, so we must emit the outbound separately."""
+        text = (reply or "").strip()
+        if not text:
+            return
+        ob = self.onebot_service
+        if ob is None or not settings.onebot.enabled:
+            logger.warning(
+                "Delayed task reply not pushed to OneBot (service missing or OneBot disabled) | task_id=%s | scope=%s",
+                task_id,
+                scope.scope_id,
+            )
+            return
+        try:
+            if scope.scene_type == "group" and scope.group_id:
+                ob.send_message_sync(target_type="group", target_id=str(scope.group_id), content=text)
+            else:
+                ob.send_message_sync(target_type="private", target_id=str(scope.actor_user_id), content=text)
+            logger.info(
+                "Delayed task reply pushed to OneBot | task_id=%s | scope=%s | len=%s",
+                task_id,
+                scope.scope_id,
+                len(text),
+            )
+        except Exception as exc:  # pragma: no cover - network / runtime loop
+            logger.exception(
+                "Delayed task OneBot send failed | task_id=%s | scope=%s | err=%s",
+                task_id,
+                scope.scope_id,
+                exc,
+            )
 
     def apply_runtime_settings(self, new_settings: "Settings") -> dict[str, object]:
         """
