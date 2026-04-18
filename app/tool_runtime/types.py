@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 
 @dataclass(slots=True)
@@ -18,6 +18,8 @@ class ToolResult:
     ok: bool
     data: dict[str, Any] = field(default_factory=dict)
     error: str = ""
+    error_code: str = ""
+    error_details: dict[str, Any] = field(default_factory=dict)
     meta: dict[str, Any] = field(default_factory=dict)
 
 
@@ -30,6 +32,33 @@ class ToolSpec:
     concurrency_safe: bool = False
 
 
+ToolErrorCode = Literal[
+    "invalid_input",
+    "permission_denied",
+    "execution_failed",
+    "timeout",
+    "tool_not_found",
+    "internal_error",
+]
+
+
+PermissionBehavior = Literal["allow", "ask", "deny"]
+
+
+@dataclass(slots=True)
+class PermissionDecision:
+    behavior: PermissionBehavior
+    reason: str
+    source: str = "tool_runtime_policy"
+
+
+@dataclass(slots=True)
+class ToolExecutionContext:
+    scope_id: str
+    user_message: str
+    round_index: int
+
+
 @dataclass(slots=True)
 class ToolLoopDecision:
     final_reply: str = ""
@@ -39,5 +68,7 @@ class ToolLoopDecision:
 
 class Tool(Protocol):
     def spec(self) -> ToolSpec: ...
+
+    def validate_input(self, payload: dict[str, Any]) -> tuple[bool, str]: ...
 
     def call(self, payload: dict[str, Any]) -> ToolResult: ...

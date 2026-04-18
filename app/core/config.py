@@ -133,6 +133,7 @@ class ToolRuntimeConfig(BaseModel):
     force_send_whitelist: bool = False
     allowed_send_targets: list[str] = Field(default_factory=list)
     send_rate_limit_per_minute: int = Field(default=10, ge=1, le=300)
+    non_readonly_permission_behavior: str = "allow"  # allow | ask | deny
 
 
 class DelayedTaskConfig(BaseModel):
