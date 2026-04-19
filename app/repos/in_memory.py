@@ -69,6 +69,16 @@ class InMemoryMessageRepo(MessageRepo):
     def list_by_user(self, user_id: str, limit: int = 20) -> list[Message]:
         return self._by_user[user_id][-limit:]
 
+    def list_by_scope(self, scope_id: str, limit: int = 50) -> list[Message]:
+        sid = (scope_id or "").strip()
+        if not sid or limit <= 0:
+            return []
+        scoped = [m for m in self._messages if (m.scope_id or "").strip() == sid]
+        scoped.sort(key=lambda m: m.created_at, reverse=True)
+        chunk = scoped[:limit]
+        chunk.reverse()
+        return chunk
+
     def list_all(self, limit: int = 200) -> list[Message]:
         return self._messages[-limit:]
 

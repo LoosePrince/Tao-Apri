@@ -37,6 +37,7 @@ from app.jobs.task_queue import TaskQueue
 from app.repos.interfaces import MessageRepo, PreferenceRepo, ProfileRepo, RelationRepo, VectorRepo
 from app.services.llm_client import LLMClient
 from app.services.image_understanding_service import ImageUnderstandingService
+from app.services.history_reference_builder import build_history_reference_context
 from app.services.prompt_composer import PromptComposer
 from app.services.retrieval_policy_service import RetrievalPolicyService
 from app.services.window_preprocessor import WindowPreprocessor
@@ -732,6 +733,11 @@ class ChatOrchestrator:
             group_emotion_avg,
         )
         persona = self.persona_engine.get_runtime_persona(now, user_id)
+        history_ref = ""
+        hist_limit = settings.conversation_history.reference_message_limit
+        if hist_limit > 0:
+            history_messages = self.message_repo.list_by_scope(scope.scope_id, limit=hist_limit)
+            history_ref = build_history_reference_context(now=now, messages=history_messages)
         prompt_ctx = self.prompt_composer.compose(
             now=now,
             viewer_user_id=user_id,
@@ -741,6 +747,7 @@ class ChatOrchestrator:
             global_emotion=emotion_state.global_emotion,
             memories=memories,
             user_message=user_message,
+            history_reference_context=history_ref,
         )
         if cross_access_denied and "跨对话模糊参考" not in prompt_ctx.memory_context:
             prompt_ctx.memory_context += "\n- 跨对话信息当前不可访问；若被问及他人细节，请明确回答“我不知道”。"

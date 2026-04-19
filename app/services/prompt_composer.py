@@ -13,6 +13,7 @@ class PromptContext:
     system_core: str
     system_runtime: str
     memory_context: str
+    history_reference_context: str
     policy_notice: str
     parameter_context: str
     profile_context: str
@@ -121,6 +122,7 @@ class PromptComposer:
         global_emotion: float,
         memories: list[Message],
         user_message: str,
+        history_reference_context: str = "",
     ) -> PromptContext:
         memory_context = self._build_memory_context(viewer_user_id=viewer_user_id, memories=memories)
         core_template = read_required_markdown_asset("prompt/system_core.md")
@@ -150,6 +152,7 @@ class PromptComposer:
             system_core=system_core,
             system_runtime=system_runtime,
             memory_context=memory_context,
+            history_reference_context=history_reference_context.strip(),
             policy_notice=policy_notice,
             parameter_context=self._build_parameter_context(),
             profile_context=viewer_profile_summary.strip() or default_profile_context,

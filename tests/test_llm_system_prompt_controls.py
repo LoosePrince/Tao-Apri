@@ -7,6 +7,7 @@ def _prompt_context() -> PromptContext:
         system_core="core",
         system_runtime="runtime",
         memory_context="memory",
+        history_reference_context="",
         policy_notice="notice",
         parameter_context="param_ctx",
         profile_context="profile",

@@ -35,6 +35,7 @@ def _prompt_ctx() -> PromptContext:
         system_core="core",
         system_runtime="runtime",
         memory_context="memory",
+        history_reference_context="",
         policy_notice="policy",
         parameter_context="params",
         profile_context="profile",

@@ -27,6 +27,10 @@ class MessageRepo(ABC):
     def list_by_user(self, user_id: str, limit: int = 20) -> list[Message]: ...
 
     @abstractmethod
+    def list_by_scope(self, scope_id: str, limit: int = 50) -> list[Message]:
+        """Most recent `limit` messages in the conversation scope, oldest-first."""
+
+    @abstractmethod
     def list_all(self, limit: int = 200) -> list[Message]: ...
 
 

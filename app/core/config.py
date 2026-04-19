@@ -53,6 +53,12 @@ class ProfileConfig(BaseModel):
     recent_message_limit: int = Field(default=30, ge=5, le=200)
 
 
+class ConversationHistoryConfig(BaseModel):
+    """Recent in-scope transcript for low-weight prompt context (older than current batch)."""
+
+    reference_message_limit: int = Field(default=0, ge=0, le=500)
+
+
 class JobsConfig(BaseModel):
     enabled: bool = False
     worker_count: int = Field(default=1, ge=1, le=4)
@@ -188,6 +194,7 @@ class Settings(BaseSettings):
     persona: PersonaConfig = PersonaConfig()
     session: SessionConfig = SessionConfig()
     profile: ProfileConfig = ProfileConfig()
+    conversation_history: ConversationHistoryConfig = ConversationHistoryConfig()
     jobs: JobsConfig = JobsConfig()
     llm: LLMConfig = LLMConfig()
     rhythm: RhythmConfig = RhythmConfig()
@@ -265,6 +272,7 @@ def _current_behavior_parameter_values() -> dict[str, str]:
         "PERSONA__ASSETS_DIR": persona.assets_dir,
         "SESSION__RENEW_AFTER_HOURS": f"{session.renew_after_hours:.2f}",
         "PROFILE__RECENT_MESSAGE_LIMIT": str(profile.recent_message_limit),
+        "CONVERSATION_HISTORY__REFERENCE_MESSAGE_LIMIT": str(settings.conversation_history.reference_message_limit),
         "LLM__PROVIDER": llm.provider,
         "LLM__MODEL": llm.model,
         "LLM__API_KEY": "configured" if bool(llm.api_key) else "empty",

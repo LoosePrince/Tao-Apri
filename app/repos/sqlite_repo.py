@@ -537,6 +537,21 @@ class SQLiteMessageRepo(MessageRepo):
         ).fetchall()
         return [self._to_message(row) for row in reversed(rows)]
 
+    def list_by_scope(self, scope_id: str, limit: int = 50) -> list[Message]:
+        sid = (scope_id or "").strip()
+        if not sid or limit <= 0:
+            return []
+        rows = self.store.conn.execute(
+            """
+            SELECT * FROM messages
+            WHERE scope_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (sid, limit),
+        ).fetchall()
+        return [self._to_message(row) for row in reversed(rows)]
+
     def list_all(self, limit: int = 200) -> list[Message]:
         rows = self.store.conn.execute(
             "SELECT * FROM messages ORDER BY created_at DESC LIMIT ?",

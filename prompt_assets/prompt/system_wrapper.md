@@ -8,6 +8,8 @@
 记忆上下文：
 {memory_context}
 
+{history_reference_context}
+
 策略说明：
 {policy_notice}
 

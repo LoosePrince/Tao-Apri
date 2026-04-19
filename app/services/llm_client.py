@@ -657,6 +657,7 @@ class LLMClient:
             system_runtime=prompt_context.system_runtime,
             profile_context=prompt_context.profile_context,
             memory_context=prompt_context.memory_context,
+            history_reference_context=prompt_context.history_reference_context,
             policy_notice=prompt_context.policy_notice if include_notice else "本轮不注入首轮策略提示。",
             parameter_context=prompt_context.parameter_context,
         ).strip()
