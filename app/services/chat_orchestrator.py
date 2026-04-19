@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import logging
 import json
 import threading
@@ -17,13 +17,15 @@ from app.domain.conversation_scope import ConversationScope
 from app.domain.group_conversation_hints import GroupConversationHints
 from app.domain.models import Message, UserProfile, UserRelation
 from app.domain.relation_policy import (
+    apply_hostile_penalty_to_relation,
     apply_numeric_and_tags_from_decision,
     ensure_developer_tag,
     finalize_relation_after_update,
     relation_to_payload_dict,
 )
 from app.services.relation_boundary import evaluate_relation_boundary
-from app.domain.services.emotion_engine import EmotionEngine
+from app.domain.services.emotion_engine import EmotionEngine, EmotionState
+from app.domain.services.hostile_input import HostileInputVerdict, evaluate_hostile_input
 from app.domain.services.identity_service import IdentityService
 from app.domain.services.memory_writer import MemoryWriter
 from app.services.window_delivery_timeout import (
@@ -223,6 +225,7 @@ class ChatOrchestrator:
         message_score: float,
         emotion_state,
         reason: str,
+        hostile_verdict: HostileInputVerdict | None = None,
     ) -> ChatResult:
         self.metrics.inc("reply_skipped_count")
         logger.info(
@@ -239,6 +242,8 @@ class ChatOrchestrator:
             content=user_message,
             emotion_score=message_score,
         )
+        if hostile_verdict is not None and hostile_verdict.active:
+            self._persist_hostile_relation_penalty(user_id, hostile_verdict)
         return ChatResult(
             session_id=session.session_id,
             reply="",
@@ -256,6 +261,7 @@ class ChatOrchestrator:
         message_score: float,
         emotion_state,
         group_hints: GroupConversationHints,
+        hostile_verdict: HostileInputVerdict | None = None,
     ) -> ChatResult | None:
         if scope.scene_type != "group":
             return None
@@ -268,6 +274,7 @@ class ChatOrchestrator:
                 message_score=message_score,
                 emotion_state=emotion_state,
                 reason="group:reject_interjection_tone",
+                hostile_verdict=hostile_verdict,
             )
         if not group_hints.bot_mentioned:
             if not group_without_mention_has_clear_hook(user_message, message_score):
@@ -279,8 +286,28 @@ class ChatOrchestrator:
                     message_score=message_score,
                     emotion_state=emotion_state,
                     reason="group:insufficient_hook_without_at",
+                    hostile_verdict=hostile_verdict,
                 )
         return None
+
+    def _persist_hostile_relation_penalty(self, user_id: str, hostile_verdict: HostileInputVerdict) -> None:
+        """When no assistant reply is persisted, still apply deterministic relation pull-down."""
+        if not hostile_verdict.active:
+            return
+        relation = self.relation_repo.get(user_id, ASSISTANT_RELATION_ID) or UserRelation(
+            source_user_id=user_id,
+            target_user_id=ASSISTANT_RELATION_ID,
+        )
+        ensure_developer_tag(relation, user_id=user_id)
+        apply_hostile_penalty_to_relation(relation, severity=hostile_verdict.severity, kinds=hostile_verdict.kinds)
+        finalize_relation_after_update(relation, user_id=user_id)
+        self.relation_repo.upsert(relation)
+        logger.warning(
+            "Hostile relation penalty persisted (no assistant reply path) | user_id=%s | kinds=%s | severity=%.2f",
+            user_id,
+            sorted(hostile_verdict.kinds),
+            hostile_verdict.severity,
+        )
 
     def _update_user_relation_state(
         self,
@@ -289,6 +316,7 @@ class ChatOrchestrator:
         user_message: str,
         reply: str,
         relation_update: dict[str, object] | None = None,
+        hostile_verdict: HostileInputVerdict | None = None,
     ) -> None:
         relation = self.relation_repo.get(user_id, ASSISTANT_RELATION_ID) or UserRelation(
             source_user_id=user_id,
@@ -313,10 +341,12 @@ class ChatOrchestrator:
             )
             raw_decision = evolved if isinstance(evolved, dict) else {}
         apply_numeric_and_tags_from_decision(relation, raw_decision)
+        if hostile_verdict is not None and hostile_verdict.active:
+            apply_hostile_penalty_to_relation(relation, severity=hostile_verdict.severity, kinds=hostile_verdict.kinds)
         finalize_relation_after_update(relation, user_id=user_id)
         self.relation_repo.upsert(relation)
         logger.info(
-            "Relation evolved | user_id=%s | target=%s | polarity=%s | strength=%.3f | trust=%.3f | intimacy=%.3f | dependency=%.3f | tags=%s | role=%s | boundary=%s",
+            "Relation evolved | user_id=%s | target=%s | polarity=%s | strength=%.3f | trust=%.3f | intimacy=%.3f | dependency=%.3f | tags=%s | role=%s | boundary=%s | hostile=%s",
             user_id,
             ASSISTANT_RELATION_ID,
             relation.polarity,
@@ -327,6 +357,7 @@ class ChatOrchestrator:
             relation.relation_tags,
             relation.role_priority,
             relation.boundary_state,
+            sorted(hostile_verdict.kinds) if hostile_verdict and hostile_verdict.active else [],
         )
 
     def _persist_profile(self, profile: UserProfile) -> None:
@@ -467,8 +498,40 @@ class ChatOrchestrator:
 
         with self._session_emotion_lock:
             last_session_emotion = self._session_emotion.get(session.session_id, 0.0)
+
+        gh = group_hints or GroupConversationHints()
+        hostile_verdict = evaluate_hostile_input(
+            raw_user_message,
+            user_message,
+            scene_type=scope.scene_type,
+            bot_mentioned=gh.bot_mentioned,
+        )
+        if hostile_verdict.active:
+            self.metrics.inc("hostile_input_detected")
+            for k in hostile_verdict.kinds:
+                self.metrics.inc(f"hostile_input_kind__{k}")
+            logger.warning(
+                "Hostile user input flagged | user_id=%s | kinds=%s | severity=%.2f",
+                user_id,
+                sorted(hostile_verdict.kinds),
+                hostile_verdict.severity,
+            )
+
         message_score = self.emotion_engine.score_message(user_message)
+        if hostile_verdict.active:
+            message_score = min(message_score, hostile_verdict.message_score_cap)
         emotion_state = self.emotion_engine.update(last_session_emotion, message_score)
+        if hostile_verdict.active:
+            pull = 0.15 + 0.35 * hostile_verdict.severity
+            self.emotion_engine.global_emotion = max(-1.0, self.emotion_engine.global_emotion - pull)
+            repo = getattr(self.emotion_engine, "state_repo", None)
+            if repo is not None:
+                repo.set_global_emotion(self.emotion_engine.global_emotion)
+            cap_session = min(emotion_state.session_emotion, -0.28 - 0.45 * hostile_verdict.severity)
+            emotion_state = EmotionState(
+                session_emotion=max(-1.0, cap_session),
+                global_emotion=self.emotion_engine.global_emotion,
+            )
         with self._session_emotion_lock:
             self._session_emotion[session.session_id] = emotion_state.session_emotion
         logger.info(
@@ -480,7 +543,6 @@ class ChatOrchestrator:
             emotion_state.global_emotion,
         )
 
-        gh = group_hints or GroupConversationHints()
         preflight = self._try_group_early_skip_reply(
             scope=scope,
             session=session,
@@ -489,6 +551,7 @@ class ChatOrchestrator:
             message_score=message_score,
             emotion_state=emotion_state,
             group_hints=gh,
+            hostile_verdict=hostile_verdict,
         )
         if preflight is not None:
             return preflight
@@ -681,6 +744,11 @@ class ChatOrchestrator:
         )
         if cross_access_denied and "跨对话模糊参考" not in prompt_ctx.memory_context:
             prompt_ctx.memory_context += "\n- 跨对话信息当前不可访问；若被问及他人细节，请明确回答“我不知道”。"
+        if hostile_verdict.active:
+            prompt_ctx = replace(
+                prompt_ctx,
+                system_runtime=f"{prompt_ctx.system_runtime}\n\n{hostile_verdict.runtime_addon}".strip(),
+            )
         logger.debug(
             "Prompt context composed | user_id=%s | system_core_len=%s | system_runtime_len=%s | memory_context_len=%s",
             user_id,
@@ -825,6 +893,8 @@ class ChatOrchestrator:
                 source_message_id=source_message_id,
             )
             logger.debug("User message persisted (reply skipped) | user_id=%s | session_id=%s", user_id, session.session_id)
+            if hostile_verdict.active:
+                self._persist_hostile_relation_penalty(user_id, hostile_verdict)
             return ChatResult(
                 session_id=session.session_id,
                 reply="",
@@ -889,6 +959,7 @@ class ChatOrchestrator:
             user_message=raw_user_message or user_message,
             reply=reply,
             relation_update=relation_update,
+            hostile_verdict=hostile_verdict,
         )
         logger.debug("Assistant message persisted | user_id=%s | session_id=%s", user_id, session.session_id)
 

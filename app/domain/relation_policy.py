@@ -137,6 +137,29 @@ def apply_numeric_and_tags_from_decision(relation: UserRelation, decision: dict[
         relation.boundary_state = normalize_boundary_state(decision["boundary_state"])
 
 
+def apply_hostile_penalty_to_relation(relation: UserRelation, *, severity: float, kinds: frozenset[str]) -> None:
+    """
+    Deterministic trust/intimacy/strength pull-down after hostile turns.
+    Runs after LLM relation fragments are merged; `finalize_relation_after_update` should still be called.
+    """
+    if not kinds:
+        return
+    sev = max(0.0, min(1.0, float(severity)))
+    drop_t = 0.10 + 0.20 * sev
+    drop_i = 0.08 + 0.14 * sev
+    drop_s = 0.05 + 0.12 * sev
+    if "insult" in kinds:
+        drop_t += 0.06
+        drop_i += 0.05
+    if "injection" in kinds:
+        drop_t += 0.05
+    relation.trust_score = max(0.0, float(relation.trust_score) - drop_t)
+    relation.intimacy_score = max(0.0, float(relation.intimacy_score) - drop_i)
+    relation.strength = max(0.0, float(relation.strength) - drop_s)
+    if "insult" in kinds and sev >= 0.55 and relation.trust_score <= 0.32:
+        relation.polarity = "negative"
+
+
 def finalize_relation_after_update(relation: UserRelation, *, user_id: str) -> None:
     """分数裁剪、规则边界兜底、标签归一、开发者账号标签注入。"""
     relation.strength = _clamp01(relation.strength)

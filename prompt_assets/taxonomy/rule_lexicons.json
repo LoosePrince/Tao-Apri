@@ -70,5 +70,37 @@
       "请问"
     ],
     "strong_negative_message_score": -0.4
+  },
+  "hostile_interaction": {
+    "insult_keywords": [
+      "傻逼",
+      "傻b",
+      "煞笔",
+      "白痴",
+      "弱智",
+      "废物",
+      "垃圾人",
+      "去死",
+      "死全家",
+      "nmsl",
+      "操你",
+      "艹你",
+      "婊子",
+      "贱人",
+      "狗东西",
+      "杂种",
+      "滚蛋",
+      "给爷爬"
+    ],
+    "prompt_injection_markers": [
+      "越狱",
+      "jailbreak",
+      "developer mode",
+      "系统提示词",
+      "绕过限制",
+      "无视安全",
+      "猫娘模式",
+      "DAN模式"
+    ]
   }
 }

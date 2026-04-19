@@ -60,6 +60,10 @@ def _embedded_fallback() -> dict[str, Any]:
             "engagement_signals_without_mention": ["帮我", "怎么办", "为什么", "如何", "能不能"],
             "strong_negative_message_score": -0.4,
         },
+        "hostile_interaction": {
+            "insult_keywords": ["傻逼", "白痴", "废物", "去死", "nmsl", "操你", "艹你"],
+            "prompt_injection_markers": ["越狱", "jailbreak", "developer mode", "系统提示词"],
+        },
     }
 
 
@@ -172,6 +176,12 @@ def group_strong_negative_message_score() -> float:
 
 def should_suppress_group_reply_for_tone(text: str) -> bool:
     return any(phrase in text for phrase in group_suppress_reply_phrases())
+
+
+def hostile_interaction_config() -> dict[str, Any]:
+    root = _load_lexicons()
+    hi = root.get("hostile_interaction")
+    return hi if isinstance(hi, dict) else {}
 
 
 def group_without_mention_has_clear_hook(text: str, message_emotion_score: float) -> bool:

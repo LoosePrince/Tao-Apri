@@ -7,7 +7,6 @@ from datetime import datetime
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
-
 DEFAULT_EXCLUDE_DIRS = {
     ".git",
     ".idea",
@@ -37,6 +36,7 @@ DEFAULT_EXCLUDE_GLOBS = {
     "*.tmp",
     "*.swp",
     "*.zip",
+    "*.db",
 }
 
 
