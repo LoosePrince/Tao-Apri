@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
+from datetime import datetime
 
 from app.domain.models import DelayedTask, MemoryFact, Message, Session, User, UserPreference, UserProfile, UserRelation
 
@@ -29,6 +32,27 @@ class MessageRepo(ABC):
     @abstractmethod
     def list_by_scope(self, scope_id: str, limit: int = 50) -> list[Message]:
         """Most recent `limit` messages in the conversation scope, oldest-first."""
+
+    @abstractmethod
+    def list_other_scopes_for_user_since(
+        self,
+        *,
+        user_id: str,
+        exclude_scope_id: str,
+        not_before: datetime,
+        limit: int,
+        include_other_users: bool = False,
+        include_group_chat_messages: bool = True,
+        viewer_scene_type: str = "private",
+        viewer_group_id: str | None = None,
+    ) -> list[Message]:
+        """
+        Cross-mix pool: oldest-first, created_at >= not_before, scope_id != exclude_scope_id.
+
+        Default: same `user_id` only. If `include_other_users` and viewer is group with `viewer_group_id`,
+        also includes other members' group messages in that group. If `include_group_chat_messages` is
+        false, rows with scene_type == \"group\" are excluded.
+        """
 
     @abstractmethod
     def list_all(self, limit: int = 200) -> list[Message]: ...

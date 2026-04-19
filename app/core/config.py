@@ -57,6 +57,13 @@ class ConversationHistoryConfig(BaseModel):
     """Recent in-scope transcript for low-weight prompt context (older than current batch)."""
 
     reference_message_limit: int = Field(default=0, ge=0, le=500)
+    # When reference is on: mix in messages from other scopes, not older than oldest in-scope row.
+    cross_mix_enabled: bool = False
+    cross_mix_message_limit: int = Field(default=0, ge=0, le=200)
+    # 群聊下：是否混入同群内其它 user_id 的已落库消息；私聊下此开关不生效（仅同用户跨会话）。
+    cross_mix_other_users_enabled: bool = False
+    # 为 false 时参杂池排除 scene_type=group 的消息（仅私聊等非群记录）。
+    cross_mix_group_chat_messages_enabled: bool = True
 
 
 class JobsConfig(BaseModel):
@@ -273,6 +280,14 @@ def _current_behavior_parameter_values() -> dict[str, str]:
         "SESSION__RENEW_AFTER_HOURS": f"{session.renew_after_hours:.2f}",
         "PROFILE__RECENT_MESSAGE_LIMIT": str(profile.recent_message_limit),
         "CONVERSATION_HISTORY__REFERENCE_MESSAGE_LIMIT": str(settings.conversation_history.reference_message_limit),
+        "CONVERSATION_HISTORY__CROSS_MIX_ENABLED": str(settings.conversation_history.cross_mix_enabled).lower(),
+        "CONVERSATION_HISTORY__CROSS_MIX_MESSAGE_LIMIT": str(settings.conversation_history.cross_mix_message_limit),
+        "CONVERSATION_HISTORY__CROSS_MIX_OTHER_USERS_ENABLED": str(
+            settings.conversation_history.cross_mix_other_users_enabled
+        ).lower(),
+        "CONVERSATION_HISTORY__CROSS_MIX_GROUP_CHAT_MESSAGES_ENABLED": str(
+            settings.conversation_history.cross_mix_group_chat_messages_enabled
+        ).lower(),
         "LLM__PROVIDER": llm.provider,
         "LLM__MODEL": llm.model,
         "LLM__API_KEY": "configured" if bool(llm.api_key) else "empty",

@@ -37,7 +37,10 @@ from app.jobs.task_queue import TaskQueue
 from app.repos.interfaces import MessageRepo, PreferenceRepo, ProfileRepo, RelationRepo, VectorRepo
 from app.services.llm_client import LLMClient
 from app.services.image_understanding_service import ImageUnderstandingService
-from app.services.history_reference_builder import build_history_reference_context
+from app.services.history_reference_builder import (
+    build_history_reference_context,
+    merge_scope_and_cross_messages,
+)
 from app.services.prompt_composer import PromptComposer
 from app.services.retrieval_policy_service import RetrievalPolicyService
 from app.services.window_preprocessor import WindowPreprocessor
@@ -736,8 +739,32 @@ class ChatOrchestrator:
         history_ref = ""
         hist_limit = settings.conversation_history.reference_message_limit
         if hist_limit > 0:
-            history_messages = self.message_repo.list_by_scope(scope.scope_id, limit=hist_limit)
-            history_ref = build_history_reference_context(now=now, messages=history_messages)
+            scope_history = self.message_repo.list_by_scope(scope.scope_id, limit=hist_limit)
+            merged_history = list(scope_history)
+            ch = settings.conversation_history
+            if (
+                ch.cross_mix_enabled
+                and ch.cross_mix_message_limit > 0
+                and scope_history
+            ):
+                floor = scope_history[0].created_at
+                cross_rows = self.message_repo.list_other_scopes_for_user_since(
+                    user_id=user_id,
+                    exclude_scope_id=scope.scope_id,
+                    not_before=floor,
+                    limit=ch.cross_mix_message_limit,
+                    include_other_users=ch.cross_mix_other_users_enabled,
+                    include_group_chat_messages=ch.cross_mix_group_chat_messages_enabled,
+                    viewer_scene_type=scope.scene_type,
+                    viewer_group_id=scope.group_id,
+                )
+                merged_history = merge_scope_and_cross_messages(scope_history, cross_rows)
+            history_ref = build_history_reference_context(
+                now=now,
+                messages=merged_history,
+                current_scope_id=scope.scope_id,
+                viewer_user_id=user_id,
+            )
         prompt_ctx = self.prompt_composer.compose(
             now=now,
             viewer_user_id=user_id,

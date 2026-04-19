@@ -79,6 +79,69 @@ class InMemoryMessageRepo(MessageRepo):
         chunk.reverse()
         return chunk
 
+    def list_other_scopes_for_user_since(
+        self,
+        *,
+        user_id: str,
+        exclude_scope_id: str,
+        not_before: datetime,
+        limit: int,
+        include_other_users: bool = False,
+        include_group_chat_messages: bool = True,
+        viewer_scene_type: str = "private",
+        viewer_group_id: str | None = None,
+    ) -> list[Message]:
+        uid = (user_id or "").strip()
+        xid = (exclude_scope_id or "").strip()
+        if not uid or limit <= 0:
+            return []
+        floor = not_before if not_before.tzinfo else not_before.replace(tzinfo=timezone.utc)
+        seen: set[str] = set()
+        hits: list[Message] = []
+
+        def _ts(m: Message) -> datetime:
+            return m.created_at if m.created_at.tzinfo else m.created_at.replace(tzinfo=timezone.utc)
+
+        def _eligible(msg: Message) -> bool:
+            sid = (msg.scope_id or "").strip()
+            if not sid or sid == xid:
+                return False
+            if _ts(msg) < floor:
+                return False
+            if not include_group_chat_messages and (msg.scene_type or "").strip().lower() == "group":
+                return False
+            return True
+
+        for m in self._messages:
+            if m.user_id != uid:
+                continue
+            if not _eligible(m):
+                continue
+            if m.message_id in seen:
+                continue
+            seen.add(m.message_id)
+            hits.append(m)
+
+        st = (viewer_scene_type or "").strip().lower()
+        gid = (viewer_group_id or "").strip()
+        if include_other_users and st == "group" and gid and include_group_chat_messages:
+            for m in self._messages:
+                if (m.group_id or "").strip() != gid:
+                    continue
+                if m.user_id == uid:
+                    continue
+                if (m.scene_type or "").strip().lower() != "group":
+                    continue
+                if not _eligible(m):
+                    continue
+                if m.message_id in seen:
+                    continue
+                seen.add(m.message_id)
+                hits.append(m)
+
+        hits.sort(key=lambda m: (_ts(m), m.message_id))
+        return hits[:limit]
+
     def list_all(self, limit: int = 200) -> list[Message]:
         return self._messages[-limit:]
 
