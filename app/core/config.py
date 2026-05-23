@@ -104,6 +104,10 @@ class RhythmConfig(BaseModel):
     enable_terminate_keywords: bool = True
     terminate_keywords: list[str] = Field(default_factory=lambda: ["算了", "不用了", "当我没说"])
     wait_timeout_seconds: float = Field(default=90.0, ge=5.0, le=600.0)
+    window_batch_worker_count: int = Field(default=2, ge=1, le=16)
+    window_state_ttl_seconds: float = Field(default=900.0, ge=10.0, le=86400.0)
+    window_cleanup_interval_seconds: float = Field(default=30.0, ge=1.0, le=3600.0)
+    window_max_active_scopes: int = Field(default=2000, ge=10, le=100000)
 
 
 class OneBotConfig(BaseModel):

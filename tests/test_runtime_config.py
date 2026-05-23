@@ -65,3 +65,19 @@ def test_container_apply_llm_rebuilds_llm_client() -> None:
     finally:
         _restore_settings(snap)
 
+
+def test_container_apply_rhythm_rebuilds_window_manager() -> None:
+    snap = _snapshot_settings()
+    old_window_manager_id = id(container.window_manager)
+    try:
+        new_settings = Settings.model_validate(
+            {
+                **snap,
+                "rhythm": {**snap["rhythm"], "window_batch_worker_count": snap["rhythm"]["window_batch_worker_count"] + 1},
+            }
+        )
+        container.apply_runtime_settings(new_settings)
+        assert id(container.window_manager) != old_window_manager_id
+    finally:
+        _restore_settings(snap)
+

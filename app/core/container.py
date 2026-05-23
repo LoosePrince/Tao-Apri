@@ -307,6 +307,7 @@ class Container:
             scheduler_rebuild_keys = {"maintenance_enabled", "maintenance_interval_seconds"}
             scheduler_changed = any(old_dump["jobs"].get(k) != new_dump["jobs"].get(k) for k in scheduler_rebuild_keys)
             delayed_task_changed = old_dump.get("delayed_task") != new_dump.get("delayed_task")
+            rhythm_changed = old_dump.get("rhythm") != new_dump.get("rhythm")
 
             # 先更新全局 settings，让后续重建读到新值。
             for top_key in SettingsModel.model_fields.keys():
@@ -401,6 +402,24 @@ class Container:
                 self.delayed_task_scheduler.start()
                 rebuilt.append("delayed_task_scheduler")
 
+            if rhythm_changed:
+                self.window_manager.stop()
+                self.window_manager = ConversationWindowManager(
+                    batch_executor=lambda scope, batch, abort, nickname, source_message_id, attachments, group_hints, window_round_id: self.chat_orchestrator.handle_window_batch(
+                        scope=scope,
+                        user_messages=batch,
+                        abort_requested=abort,
+                        nickname=nickname,
+                        source_message_id=source_message_id,
+                        attachments=attachments,
+                        group_hints=group_hints,
+                        window_round_id=window_round_id,
+                    ),
+                    metrics=self.metrics,
+                )
+                self.window_manager.start()
+                rebuilt.append("window_manager")
+
             return {
                 "rebuilt": rebuilt,
                 "emotion_changed": emotion_changed,
@@ -408,6 +427,7 @@ class Container:
                 "jobs_queue_changed": jobs_queue_changed,
                 "scheduler_changed": scheduler_changed,
                 "delayed_task_changed": delayed_task_changed,
+                "rhythm_changed": rhythm_changed,
             }
 
 
